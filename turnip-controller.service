@@ -1,0 +1,9 @@
+[Service]
+Type=notify
+ExecStart=/usr/bin/turnip controller --serial /dev/ttyUSB0 --baud 2000000 --mtu 65535 --interface turnip0
+
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

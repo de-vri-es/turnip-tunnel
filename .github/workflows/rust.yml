@@ -1,0 +1,24 @@
+name: tests
+on:
+  push: { branches: ["main"] }
+  pull_request: { branches: ["*"] }
+
+jobs:
+  build_and_test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@master
+      - name: Build
+        run: cargo build --workspace --all-targets --color=always
+      - name: Test
+        run: cargo test --workspace --all-targets --color=always
+      - name: Build (with unix feature)
+        run: cargo build --workspace --all-targets --color=always
+      - name: Test (with unix feature)
+        run: cargo test --workspace --all-targets --color=always
+      - name: Clippy
+        uses: actions-rs-plus/clippy-check@v2.1.1
+        with:
+          args: --workspace --all-targets

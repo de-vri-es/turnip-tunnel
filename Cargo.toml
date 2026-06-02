@@ -1,0 +1,30 @@
+[package]
+name = "turnip-tunnel"
+version = "0.0.0"
+description = "IP/Ethernet tunnel backed by a half-duplex serial port"
+repository = "https://github.com/de-vri-es/turnip-tunnel"
+license = "MIT"
+edition = "2024"
+rust-version = "1.85"
+
+publish = ["crates-io"]
+keywords = ["tunnel", "IP", "TUN", "half-duplex", "serial"]
+categories = ["network-programming", "virtualization", "command-line-utilities"]
+
+[[bin]]
+name = "turnip"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5.58", features = ["derive"] }
+serial2-tokio = { version = "0.1.23", features = ["unix"] }
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "net", "macros", "io-util", "time"] }
+tracing = { version = "0.1.44", features = ["async-await"] }
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "local-time"] }
+tun-rs = { version = "2.8.3", features = ["async"] }
+
+[target.'cfg(unix)'.dependencies]
+sd-notify = "0.5.0"
+
+[profile.release]
+strip = true
