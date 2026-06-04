@@ -40,4 +40,5 @@ otherwise the `worker` will encounter timeouts while waiting for the `controller
 Most options have sane defaults, although you may need to increase timeout values when using lower baud rates.
 The only required options are the serial port (`--serial ...`) and the baud rate (`--baud`).
 
-Development sponsored by [ROCSYS B.V.](https://www.rocsys.com).
+_Development sponsored by:_<br/>
+[<img src="https://raw.githubusercontent.com/de-vri-es/turnip-tunnel/main/rocsys.svg" alt="ROCSYS B.V." width="200"/>](https://www.rocsys.com/)
