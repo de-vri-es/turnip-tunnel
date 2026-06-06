@@ -4,19 +4,24 @@
 
 To allow IP over a half-duplex serial line, each side of the serial link takes turns to transmit packets to the other side.
 Hence the name "turn IP", or "turnip".
-Additionally, the half-duplex serial port was invented around the same time as the turnip, and they are equally technologically advanced.
+Additionally, the half-duplex serial port was invented around the same time as the turnip, and they are about equally technologically advanced.
 
-On Linux, `turnip` uses the TUN/TAP driver.
-You must ensure that the `/dev/net/tun` node exists.
-If it does not, you can create it with the following commands:
+The princicple of operation is also shown by this diagram:
+<img src="https://raw.githubusercontent.com/de-vri-es/turnip-tunnel/main/principle-of-operation.svg" alt="diagram of two laptops connected to a root vegetable" width="100%"/>
 
-```bash
-mkdir -p /dev/net
-mknod /dev/net/tun c 10 200
-```
+## Feature comparison
 
-For more information about the Linux TUN/TAP driver,
-see <https://www.kernel.org/doc/html/latest/networking/tuntap.html>.
+|                                      | turnip (tunnel) | turnip (root vegetable) |
+|--------------------------------------|-----------------|-------------------------|
+| Full duplex communication            | ❌              | ❌                      |
+| Forward error correction             | ❌              | ❌                      |
+| Error detection                      | ❌ <sup>*</sup> | ❌                      |
+| Automatic retransmissions            | ❌ <sup>*</sup> | ❌                      |
+| Delicious                            | ❌              | ❌                      |
+| Fits in a healthy diet               | ❌              | ✅                      |
+| Useful when you have no alternative  | ✅              | ✅                      |
+
+<sup>*</sup> But don't worry, the transport layer or the application layer will take care of this.
 
 ## Controller and worker
 
