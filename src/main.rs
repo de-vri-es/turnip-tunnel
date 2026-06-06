@@ -507,21 +507,32 @@ struct Address {
 }
 
 impl std::str::FromStr for Address {
-	type Err = &'static str;
+	type Err = String;
 
 	fn from_str(input: &str) -> Result<Self, Self::Err> {
-		if let Some((address, prefix)) = input.split_once('/') {
-			let address = address.parse().map_err(|_| "invalid IP address")?;
-			let prefix = prefix.parse().map_err(|_| "invalid prefix length")?;
-			Ok(Self { address, prefix })
-		} else {
-			let address = input.parse().map_err(|_| "invalid IP address")?;
-			let prefix = match address {
-				IpAddr::V4(_) => 32,
-				IpAddr::V6(_) => 128,
-			};
-			Ok(Self { address, prefix })
-		}
+		let (address, prefix) = match input.split_once('/') {
+			None => (input, None),
+			Some((a, b)) => (a, Some(b)),
+		};
+
+		let address = address.parse().map_err(|_| "invalid IP address")?;
+		let (family, max_prefix) = match address {
+			IpAddr::V4(_) => ("IPv4", 32),
+			IpAddr::V6(_) => ("IPv6", 128),
+		};
+
+		let prefix = match prefix {
+			None => max_prefix,
+			Some(prefix) => {
+				let prefix = prefix.parse().map_err(|_| "invalid prefix length")?;
+				if prefix > max_prefix {
+					return Err(format!("invalid prefix length for {family}: maximum is {max_prefix}"));
+				}
+				prefix
+			}
+		};
+
+		Ok(Self { address, prefix })
 	}
 }
 
