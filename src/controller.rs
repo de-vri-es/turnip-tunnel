@@ -36,35 +36,14 @@ impl Controller {
 	}
 
 	pub async fn run(&mut self) -> Result<std::convert::Infallible, ()> {
-		let mut rx_buffer = vec![0u8; 65535];
+		let mut packets = vec![0u8; 65535];
 		let mut alive = true;
 		loop {
-			let packet_size = match tokio::time::timeout(self.poll_timeout, self.interface.recv(&mut rx_buffer)).await {
-				Err(tokio::time::error::Elapsed { .. }) => None,
-				Ok(Ok(0)) => {
-					tracing::error!("Read 0-sized packet from tunnel interface, interface was deleted?");
-					return Err(());
-				}
-				Ok(Err(e)) => {
-					tracing::error!("Failed to receive packet from tunnel interface: {e}");
-					return Err(());
-				}
-				Ok(Ok(size)) => {
-					tracing::debug!("Received packet of {} bytes from tunnel interface", size);
-					Some(size)
-				}
-			};
-
-			if let Some(packet_size) = packet_size {
-				let packet_data = &rx_buffer[..packet_size];
-				protocol::send_packets(&mut self.serial_port, &[packet_data], self.write_timeout)
-					.await
-					.map_err(|e| tracing::error!("Failed to write packet over serial port: {e}"))?;
-			} else {
-				protocol::send_packets::<&[u8]>(&mut self.serial_port, &[], self.write_timeout)
-					.await
-					.map_err(|e| tracing::error!("Failed to ask for packets over serial port: {e}"))?;
-			}
+			// Receive packets from the tunnel interface and transmit them over the serial port.
+			let payload_size = self.receive_from_interface(&mut packets).await?;
+			protocol::send_packets(&mut self.serial_port, &packets[..payload_size], self.write_timeout)
+				.await
+				.map_err(|e| tracing::error!("Failed to write packet over serial port: {e}"))?;
 
 			let packets = match protocol::read_packets(&mut self.serial_port, self.read_timeout).await {
 				Ok(packets) => {
@@ -95,4 +74,69 @@ impl Controller {
 			}
 		}
 	}
+
+	/// Receive packets from the tunnel interface, putting them in the wire format in `payload_buffer`.
+	///
+	/// Waits up to `self.poll_timeout` for the first packet to be available,
+	/// then reads any directly available packets until the buffer is full.
+	async fn receive_from_interface(&mut self, payload_buffer: &mut [u8]) -> Result<usize, ()> {
+		// First parse one packet asynchronousy with a timeout.
+		let Some((len_buffer, data_buffer)) = payload_buffer.split_first_chunk_mut::<4>() else {
+			return Ok(0);
+		};
+
+		let mut total_size = 0;
+		let packet_size = match tokio::time::timeout(self.poll_timeout, self.interface.recv(data_buffer)).await {
+			Err(tokio::time::error::Elapsed { .. }) => return Ok(0),
+			Ok(Ok(0)) => {
+				tracing::error!("Read 0-sized packet from tunnel interface, interface was deleted?");
+				return Err(());
+			}
+			Ok(Err(e)) => {
+				tracing::error!("Failed to receive packet from tunnel interface: {e}");
+				return Err(());
+			}
+			Ok(Ok(size)) => {
+				tracing::debug!("Received packet of {} bytes from tunnel interface", size);
+				size
+			}
+		};
+
+		total_size += 4 + packet_size;
+		*len_buffer = (packet_size as u32).to_le_bytes();
+
+		let mtu = self.interface.mtu()
+			.map_err(|e| tracing::error!("Failed to query interface MTU: {e}"))?;
+
+		// Then opportunistically try reading more packets until the buffer is full,
+		// but only if they are directly available.
+		while let Some((len_buffer, data_buffer)) = payload_buffer.split_first_chunk_mut::<4>() {
+			if data_buffer.len() < mtu.into() {
+				break;
+			}
+			let packet_size = match self.interface.try_recv(data_buffer) {
+				Ok(0) => {
+					tracing::error!("Read 0-sized packet from tunnel interface, interface was deleted?");
+					return Err(());
+				}
+				Err(e) => {
+					if e.kind() == std::io::ErrorKind::WouldBlock {
+						break;
+					} else {
+						tracing::error!("Failed to receive packet from tunnel interface: {e}");
+						return Err(());
+					}
+				}
+				Ok(size) => {
+					tracing::debug!("Received packet of {} bytes from tunnel interface", size);
+					size
+				}
+			};
+			total_size += 4 + packet_size;
+			*len_buffer = (packet_size as u32).to_le_bytes();
+		}
+
+		Ok(total_size)
+	}
 }
+

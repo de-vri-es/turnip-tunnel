@@ -3,8 +3,8 @@ use std::io::IoSlice;
 use std::time::Duration;
 use tokio::io::AsyncReadExt as _;
 
-const PREAMBLE: [u8; 4] = [0x00, 0xFF, 0xFF, 0x01];
-const MAX_PAYLOAD_SIZE: usize = 65535;
+pub const PREAMBLE: [u8; 4] = [0x00, 0xFF, 0xFF, 0x01];
+pub const MAX_PAYLOAD_SIZE: usize = 65535;
 
 #[derive(Debug)]
 pub enum Error {
@@ -40,18 +40,12 @@ impl From<tokio::time::error::Elapsed> for Error {
 }
 
 #[tracing::instrument(skip(channel, packets))]
-pub async fn send_packets<P>(channel: &mut SerialPort, packets: &[P], timeout: Duration) -> Result<(), Error>
-where
-	P: AsRef<[u8]>,
-{
+pub async fn send_packets(channel: &mut SerialPort, packets: &[u8], timeout: Duration) -> Result<(), Error> {
 	let work = async {
-		let packet_headers: Vec<[u8; 4]> = packets.iter().map(|x| (x.as_ref().len() as u32).to_le_bytes()).collect();
-		let total_packets_size: usize = packets.iter().map(|x| x.as_ref().len()).sum();
-		let message_size = packets.len() * 4 + total_packets_size;
-		if message_size > MAX_PAYLOAD_SIZE {
-			return Err(Error::MessagePayloadTooLarge(message_size));
+		if packets.len() > MAX_PAYLOAD_SIZE {
+			return Err(Error::MessagePayloadTooLarge(packets.len()));
 		}
-		let message_size = message_size as u32;
+		let message_size = packets.len() as u32;
 
 		tracing::trace!(
 			"Sending message with payload of {message_size} bytes, containing {} packets",
@@ -62,14 +56,12 @@ where
 		frame_header[0..4].copy_from_slice(&PREAMBLE);
 		frame_header[4..8].copy_from_slice(&message_size.to_le_bytes());
 
-		let mut slices = Vec::with_capacity(packets.len() * 2 + 1);
-		slices.push(IoSlice::new(&frame_header));
-		for (header, packet) in packet_headers.iter().zip(packets) {
-			slices.push(IoSlice::new(header));
-			slices.push(IoSlice::new(packet.as_ref()));
-		}
+		let mut slices = [
+			IoSlice::new(&frame_header),
+			IoSlice::new(packets),
+		];
+		let mut slices = &mut slices[..];
 
-		let mut slices = slices.as_mut_slice();
 		while !slices.is_empty() {
 			let written = channel.write_vectored(slices).await.map_err(Error::SerialPort)?;
 			IoSlice::advance_slices(&mut slices, written);

@@ -56,19 +56,26 @@ impl Worker {
 				}
 			};
 
+			let mtu = self.interface.mtu()
+				.map_err(|e| tracing::error!("Failed to query interface MTU: {e}"))?;
+
 			// Collect packets from the tunnel interface (without waiting).
-			let mut queue: Vec<Vec<u8>> = Vec::new();
-			while queue.len() < 16 {
-				let mut packet = vec![0; 65535];
-				match self.interface.try_recv(&mut packet) {
+			let mut packet_buffer: Vec<u8> = vec![0; protocol::MAX_PAYLOAD_SIZE];
+			let mut total_size = 0;
+			while let Some((len_buffer, data_buffer)) = packet_buffer[total_size..].split_first_chunk_mut::<4>() {
+				// Stop parsing if the buffer is too small for a full packet (except if this is the first packet).
+				if total_size > 0 && data_buffer.len() < mtu.into() {
+					break;
+				}
+				match self.interface.try_recv(data_buffer) {
 					Ok(0) => {
 						tracing::error!("Read 0-sized packet from tunnel interface, interface was deleted?");
 						return Err(());
 					}
-					Ok(size) => {
-						tracing::debug!("Received packet of {} bytes from tunnel interface", size);
-						packet.truncate(size);
-						queue.push(packet);
+					Ok(packet_size) => {
+						tracing::debug!("Received packet of {packet_size} bytes from tunnel interface");
+						*len_buffer = (packet_size as u32).to_le_bytes();
+						total_size += 4 + packet_size;
 					}
 					Err(e) => {
 						if e.kind() == std::io::ErrorKind::WouldBlock {
@@ -82,7 +89,7 @@ impl Worker {
 			}
 
 			// First transmit queued packets back over the serial port, since this is our only chance to do it.
-			protocol::send_packets(&mut self.serial_port, &queue, self.write_timeout)
+			protocol::send_packets(&mut self.serial_port, &packet_buffer[..total_size], self.write_timeout)
 				.await
 				.map_err(|e| tracing::error!("Failed to write packet(s) to serial port: {e}"))?;
 
