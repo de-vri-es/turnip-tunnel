@@ -64,6 +64,9 @@ pub async fn send_packets(channel: &mut SerialPort, packets: &[u8], timeout: Dur
 
 		while !slices.is_empty() {
 			let written = channel.write_vectored(slices).await.map_err(Error::SerialPort)?;
+			if written == 0 {
+				return Err(Error::SerialPort(std::io::ErrorKind::UnexpectedEof.into()));
+			}
 			IoSlice::advance_slices(&mut slices, written);
 		}
 
