@@ -4,7 +4,6 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt as _;
 
 pub const PREAMBLE: [u8; 4] = [0x00, 0xFF, 0xFF, 0x01];
-pub const MAX_PAYLOAD_SIZE: usize = 65535;
 
 #[derive(Debug)]
 pub enum Error {
@@ -12,7 +11,7 @@ pub enum Error {
 	TimeoutElapsed,
 	InvalidPreamble { actual: [u8; 4] },
 	InvalidMessagePayload { reason: &'static str },
-	MessagePayloadTooLarge(usize),
+	MessagePayloadTooLarge { actual: usize, max: u32 },
 }
 
 impl std::fmt::Display for Error {
@@ -26,7 +25,7 @@ impl std::fmt::Display for Error {
 			Self::InvalidMessagePayload { reason } => {
 				write!(f, "invalid message payload: {reason}")
 			}
-			Self::MessagePayloadTooLarge(length) => write!(f, "message payload too large: {length} bytes, maximum allowed is {}", MAX_PAYLOAD_SIZE),
+			Self::MessagePayloadTooLarge { actual, max } => write!(f, "message payload too large: {actual} bytes, maximum allowed is {max}"),
 		}
 	}
 }
@@ -38,10 +37,10 @@ impl From<tokio::time::error::Elapsed> for Error {
 }
 
 #[tracing::instrument(skip(channel, packets))]
-pub async fn send_packets(channel: &mut SerialPort, packets: &[u8], timeout: Duration) -> Result<(), Error> {
+pub async fn send_packets(channel: &mut SerialPort, packets: &[u8], timeout: Duration, max_payload_size: u32) -> Result<(), Error> {
 	let work = async {
-		if packets.len() > MAX_PAYLOAD_SIZE {
-			return Err(Error::MessagePayloadTooLarge(packets.len()));
+		if packets.len() > max_payload_size as usize {
+			return Err(Error::MessagePayloadTooLarge { actual: packets.len(), max: max_payload_size });
 		}
 		let message_size = packets.len() as u32;
 
@@ -74,7 +73,7 @@ pub async fn send_packets(channel: &mut SerialPort, packets: &[u8], timeout: Dur
 }
 
 #[tracing::instrument(skip(channel))]
-pub async fn read_packets(channel: &mut SerialPort, timeout: Duration) -> Result<Packets, Error> {
+pub async fn read_packets(channel: &mut SerialPort, timeout: Duration, max_payload_size: u32) -> Result<Packets, Error> {
 	let work = async {
 		// Read a header, discarding any non-preamble data.
 		let mut header = [0u8; 8];
@@ -99,10 +98,10 @@ pub async fn read_packets(channel: &mut SerialPort, timeout: Duration) -> Result
 		let message_size = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
 		tracing::trace!("Receiving message with payload of {message_size} bytes");
 
-		if message_size > MAX_PAYLOAD_SIZE {
+		if message_size > max_payload_size as usize {
 			tracing::trace!("Incoming payload too large, refusing to parse, discarding input buffer.");
 			channel.discard_input_buffer().map_err(Error::SerialPort)?;
-			return Err(Error::MessagePayloadTooLarge(message_size));
+			return Err(Error::MessagePayloadTooLarge { actual: message_size, max: max_payload_size });
 		}
 
 		let mut data = vec![0; message_size];
@@ -236,6 +235,7 @@ mod tests {
 	use super::*;
 
 	const TIMEOUT: Duration = Duration::from_millis(50);
+	const MAX_PAYLOAD_SIZE: u32 = 516;
 
 	/// Build a wire-format payload containing the given packets.
 	fn encode_payload(packets: &[&[u8]]) -> Vec<u8> {
@@ -334,7 +334,7 @@ mod tests {
 		assert!(let Ok(()) = tx.write_all(b"garbage!").await);
 		assert!(let Ok(()) = tx.write_all(&frame).await);
 
-		assert!(let Ok(packets) = read_packets(&mut rx, TIMEOUT).await);
+		assert!(let Ok(packets) = read_packets(&mut rx, TIMEOUT, MAX_PAYLOAD_SIZE).await);
 		assert!(packets.to_vec() == &[b"data".as_slice()]);
 	}
 
@@ -348,7 +348,7 @@ mod tests {
 		assert!(let Ok(()) = tx.write_all(&PREAMBLE[..2]).await);
 		assert!(let Ok(()) = tx.write_all(&frame).await);
 
-		assert!(let Ok(packets) = read_packets(&mut rx, TIMEOUT).await);
+		assert!(let Ok(packets) = read_packets(&mut rx, TIMEOUT, MAX_PAYLOAD_SIZE).await);
 		assert!(packets.to_vec() == &[b"ok".as_slice()]);
 	}
 
@@ -359,27 +359,28 @@ mod tests {
 		// Craft a header with a payload size exceeding MAX_PAYLOAD_SIZE.
 		let mut frame = Vec::new();
 		frame.extend_from_slice(&PREAMBLE);
-		let oversized = (MAX_PAYLOAD_SIZE as u32) + 1;
+		let oversized = MAX_PAYLOAD_SIZE + 1;
 		frame.extend_from_slice(&oversized.to_le_bytes());
 		assert!(let Ok(()) = tx.write_all(&frame).await);
 
-		assert!(let Err(Error::MessagePayloadTooLarge(_)) = read_packets(&mut rx, TIMEOUT).await);
+		assert!(let Err(Error::MessagePayloadTooLarge { actual, max }) = read_packets(&mut rx, TIMEOUT, MAX_PAYLOAD_SIZE).await);
+		assert!(actual == (MAX_PAYLOAD_SIZE as usize) + 1);
+		assert!(max == MAX_PAYLOAD_SIZE);
 	}
 
 	#[tokio::test]
 	async fn read_times_out_on_no_data() {
 		assert!(let Ok((_tx, mut rx)) = SerialPort::pair());
-
-		assert!(let Err(Error::TimeoutElapsed) = read_packets(&mut rx, TIMEOUT).await);
+		assert!(let Err(Error::TimeoutElapsed) = read_packets(&mut rx, TIMEOUT, MAX_PAYLOAD_SIZE).await);
 	}
 
 
 	#[tokio::test]
 	async fn roundtrip_empty_message() {
 		assert!(let Ok((mut a, mut b)) = SerialPort::pair());
-		assert!(let Ok(()) = send_packets(&mut a, &[], TIMEOUT).await);
+		assert!(let Ok(()) = send_packets(&mut a, &[], TIMEOUT, MAX_PAYLOAD_SIZE).await);
 
-		assert!(let Ok(packets) = read_packets(&mut b, TIMEOUT).await);
+		assert!(let Ok(packets) = read_packets(&mut b, TIMEOUT, MAX_PAYLOAD_SIZE).await);
 		assert!(packets.is_empty());
 	}
 
@@ -387,9 +388,9 @@ mod tests {
 	async fn roundtrip_single_packet() {
 		assert!(let Ok((mut a, mut b)) = SerialPort::pair());
 		let payload = encode_payload(&[b"roundtrip"]);
-		assert!(let Ok(()) = send_packets(&mut a, &payload, TIMEOUT).await);
+		assert!(let Ok(()) = send_packets(&mut a, &payload, TIMEOUT, MAX_PAYLOAD_SIZE).await);
 
-		assert!(let Ok(packets) = read_packets(&mut b, TIMEOUT).await);
+		assert!(let Ok(packets) = read_packets(&mut b, TIMEOUT, MAX_PAYLOAD_SIZE).await);
 		assert!(packets.to_vec() == &[b"roundtrip"]);
 	}
 
@@ -397,9 +398,9 @@ mod tests {
 	async fn roundtrip_multiple_packets() {
 		assert!(let Ok((mut a, mut b)) = SerialPort::pair());
 		let payload = encode_payload(&[b"alpha", b"beta", b"gamma"]);
-		assert!(let Ok(()) = send_packets(&mut a, &payload, TIMEOUT).await);
+		assert!(let Ok(()) = send_packets(&mut a, &payload, TIMEOUT, MAX_PAYLOAD_SIZE).await);
 
-		assert!(let Ok(packets) = read_packets(&mut b, TIMEOUT).await);
+		assert!(let Ok(packets) = read_packets(&mut b, TIMEOUT, MAX_PAYLOAD_SIZE).await);
 		assert!(packets.to_vec() == &["alpha".as_bytes(), "beta".as_bytes(), "gamma".as_bytes()]);
 	}
 
@@ -407,13 +408,13 @@ mod tests {
 	async fn roundtrip_two_consecutive_messages() {
 		assert!(let Ok((mut a, mut b)) = SerialPort::pair());
 
-		assert!(let Ok(()) = send_packets(&mut a, &encode_payload(&[b"first"]), TIMEOUT).await);
-		assert!(let Ok(()) = send_packets(&mut a, &encode_payload(&[b"second"]), TIMEOUT).await);
+		assert!(let Ok(()) = send_packets(&mut a, &encode_payload(&[b"first"]), TIMEOUT, MAX_PAYLOAD_SIZE).await);
+		assert!(let Ok(()) = send_packets(&mut a, &encode_payload(&[b"second"]), TIMEOUT, MAX_PAYLOAD_SIZE).await);
 
-		assert!(let Ok(packets) = read_packets(&mut b, TIMEOUT).await);
+		assert!(let Ok(packets) = read_packets(&mut b, TIMEOUT, MAX_PAYLOAD_SIZE).await);
 		assert!(packets.to_vec() == &[b"first"]);
 
-		assert!(let Ok(packets) = read_packets(&mut b, TIMEOUT).await);
+		assert!(let Ok(packets) = read_packets(&mut b, TIMEOUT, MAX_PAYLOAD_SIZE).await);
 		assert!(packets.to_vec() == &[b"second"]);
 	}
 
@@ -422,14 +423,14 @@ mod tests {
 		assert!(let Ok((mut a, mut b)) = SerialPort::pair());
 
 		// Send a valid message, then garbage, then another valid message.
-		assert!(let Ok(()) = send_packets(&mut a, &encode_payload(&[b"first"]), TIMEOUT).await);
+		assert!(let Ok(()) = send_packets(&mut a, &encode_payload(&[b"first"]), TIMEOUT, MAX_PAYLOAD_SIZE).await);
 		assert!(let Ok(()) = a.write_all(b"GARBAGE").await);
-		assert!(let Ok(()) = send_packets(&mut a, &encode_payload(&[b"second"]), TIMEOUT).await);
+		assert!(let Ok(()) = send_packets(&mut a, &encode_payload(&[b"second"]), TIMEOUT, MAX_PAYLOAD_SIZE).await);
 
-		assert!(let Ok(packets) = read_packets(&mut b, TIMEOUT).await);
+		assert!(let Ok(packets) = read_packets(&mut b, TIMEOUT, MAX_PAYLOAD_SIZE).await);
 		assert!(packets.to_vec() == &[b"first"]);
 
-		assert!(let Ok(packets) = read_packets(&mut b, TIMEOUT).await);
+		assert!(let Ok(packets) = read_packets(&mut b, TIMEOUT, MAX_PAYLOAD_SIZE).await);
 		assert!(packets.to_vec() == &[b"second"]);
 	}
 }

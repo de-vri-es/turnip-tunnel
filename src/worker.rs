@@ -9,6 +9,7 @@ pub struct Worker {
 	interface: tun_rs::AsyncDevice,
 	write_timeout: Duration,
 	read_timeout: Duration,
+	max_payload_size: u32,
 }
 
 impl Worker {
@@ -18,6 +19,7 @@ impl Worker {
 			interface,
 			read_timeout: Duration::from_millis(50),
 			write_timeout: Duration::from_millis(50),
+			max_payload_size: crate::DEFAULT_MAX_PAYLOAD_SIZE,
 		}
 	}
 
@@ -29,11 +31,15 @@ impl Worker {
 		self.write_timeout = timeout;
 	}
 
+	pub fn set_max_payload_size(&mut self, max_size: u32) {
+		self.max_payload_size = max_size;
+	}
+
 	pub async fn run(&mut self) -> Result<std::convert::Infallible, ()> {
 		let mut alive = true;
 		loop {
 			// Read packets from serial port.
-			let packets = match protocol::read_packets(&mut self.serial_port, self.read_timeout).await {
+			let packets = match protocol::read_packets(&mut self.serial_port, self.read_timeout, self.max_payload_size).await {
 				Ok(packets) => {
 					if !alive {
 						tracing::info!("Successfully received packets from serial port, connection is back");
@@ -69,7 +75,7 @@ impl Worker {
 				.map_err(|e| tracing::error!("Failed to query interface MTU: {e}"))?;
 
 			// Collect packets from the tunnel interface (without waiting).
-			let mut packet_buffer: Vec<u8> = vec![0; protocol::MAX_PAYLOAD_SIZE];
+			let mut packet_buffer: Vec<u8> = vec![0; self.max_payload_size as usize];
 			let mut total_size = 0;
 			while let Some((len_buffer, data_buffer)) = packet_buffer[total_size..].split_first_chunk_mut::<4>() {
 				// Stop parsing if the buffer is too small for a full packet (except if this is the first packet).
@@ -98,7 +104,7 @@ impl Worker {
 			}
 
 			// First transmit queued packets back over the serial port, since this is our only chance to do it.
-			protocol::send_packets(&mut self.serial_port, &packet_buffer[..total_size], self.write_timeout)
+			protocol::send_packets(&mut self.serial_port, &packet_buffer[..total_size], self.write_timeout, self.max_payload_size)
 				.await
 				.map_err(|e| tracing::error!("{e}"))?;
 

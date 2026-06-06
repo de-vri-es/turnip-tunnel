@@ -107,6 +107,7 @@ mod protocol;
 mod worker;
 
 const DEFAULT_MTU: u16 = 512;
+const DEFAULT_MAX_PAYLOAD_SIZE: u32 = (512 + 4) * 2;
 
 #[derive(clap::Parser)]
 struct Options {
@@ -152,6 +153,18 @@ struct ControllerCommand {
 	#[clap(short, long)]
 	#[clap(default_value_t = DEFAULT_MTU)]
 	pub mtu: u16,
+
+	/// The maximum payload size for messages going over the serial port.
+	///
+	/// Note that this is not the same as the MTU:
+	/// The MTU gives the maximum size of packets going over the tunnel interface.
+	/// But `turnip` may send multiple packets in a single message,
+	/// to improve througput when the packets are very small.
+	///
+	/// The maximum message size should always allow for at-least the MTU plus 4 bytes overhead.
+	#[clap(short, long)]
+	#[clap(default_value_t = DEFAULT_MAX_PAYLOAD_SIZE)]
+	pub max_payload_size: u32,
 
 	/// Timeout for reading a message from the serial port.
 	#[clap(long)]
@@ -204,6 +217,18 @@ struct WorkerCommand {
 	#[clap(default_value_t = DEFAULT_MTU)]
 	pub mtu: u16,
 
+	/// The maximum payload size for messages going over the serial port.
+	///
+	/// Note that this is not the same as the MTU:
+	/// The MTU gives the maximum size of packets going over the tunnel interface.
+	/// But `turnip` may send multiple packets in a single message,
+	/// to improve througput when the packets are very small.
+	///
+	/// The maximum message size should always allow for at-least the MTU plus 4 bytes overhead.
+	#[clap(short, long)]
+	#[clap(default_value_t = DEFAULT_MAX_PAYLOAD_SIZE)]
+	pub max_payload_size: u32,
+
 	/// Timeout for reading a message from the serial port.
 	#[clap(long)]
 	#[clap(default_value = "50")]
@@ -251,6 +276,18 @@ struct LocalCommand {
 	#[clap(short, long)]
 	#[clap(default_value_t = DEFAULT_MTU)]
 	pub mtu: u16,
+
+	/// The maximum payload size for messages going over the serial port.
+	///
+	/// Note that this is not the same as the MTU:
+	/// The MTU gives the maximum size of packets going over the tunnel interface.
+	/// But `turnip` may send multiple packets in a single message,
+	/// to improve througput when the packets are very small.
+	///
+	/// The maximum message size should always allow for at-least the MTU plus 4 bytes overhead.
+	#[clap(short, long)]
+	#[clap(default_value_t = DEFAULT_MAX_PAYLOAD_SIZE)]
+	pub max_payload_size: u32,
 
 	/// Timeout for reading a message from the serial port.
 	#[clap(long)]
@@ -309,11 +346,14 @@ impl ControllerCommand {
 			interface,
 			address,
 			mtu,
+			max_payload_size,
 			read_timeout,
 			write_timeout,
 			poll_timeout,
 			link_layer,
 		} = self;
+
+		check_mtu_message_size(*mtu, *max_payload_size)?;
 
 		let interface = make_interface(interface.as_deref(), address, *mtu, *link_layer, "controller")?;
 		let serial_port =
@@ -323,6 +363,7 @@ impl ControllerCommand {
 		controller.set_read_timeout(*read_timeout);
 		controller.set_write_timeout(*write_timeout);
 		controller.set_poll_timeout(*poll_timeout);
+		controller.set_max_payload_size(*max_payload_size);
 
 		let span = tracing::span!(tracing::Level::INFO, "controller");
 		let work = async move {
@@ -346,10 +387,13 @@ impl WorkerCommand {
 			interface,
 			address,
 			mtu,
+			max_payload_size,
 			read_timeout,
 			write_timeout,
 			link_layer,
 		} = self;
+
+		check_mtu_message_size(*mtu, *max_payload_size)?;
 
 		let interface = make_interface(interface.as_deref(), address, *mtu, *link_layer, "worker")?;
 		let serial_port =
@@ -358,6 +402,7 @@ impl WorkerCommand {
 		let mut worker = worker::Worker::new(serial_port, interface);
 		worker.set_read_timeout(*read_timeout);
 		worker.set_write_timeout(*write_timeout);
+		worker.set_max_payload_size(*max_payload_size);
 
 		let span = tracing::span!(tracing::Level::INFO, "worker");
 		#[cfg(unix)]
@@ -380,11 +425,14 @@ impl LocalCommand {
 			worker_interface,
 			worker_address,
 			mtu,
+			max_payload_size,
 			read_timeout,
 			write_timeout,
 			poll_timeout,
 			link_layer,
 		} = self;
+
+		check_mtu_message_size(*mtu, *max_payload_size)?;
 
 		let controller_interface = make_interface(controller_interface.as_deref(), controller_address, *mtu, *link_layer, "controller")?;
 		let worker_interface = make_interface(worker_interface.as_deref(), worker_address, *mtu, *link_layer, "worker")?;
@@ -395,10 +443,12 @@ impl LocalCommand {
 		controller.set_read_timeout(*read_timeout);
 		controller.set_write_timeout(*write_timeout);
 		controller.set_poll_timeout(*poll_timeout);
+		controller.set_max_payload_size(*max_payload_size);
 
 		let mut worker = worker::Worker::new(b, worker_interface);
 		worker.set_read_timeout(*read_timeout);
 		worker.set_write_timeout(*write_timeout);
+		worker.set_max_payload_size(*max_payload_size);
 
 		let span = tracing::span!(tracing::Level::INFO, "controller");
 		let controller = async move { tokio::spawn(async move { controller.run().instrument(span).await }).await.unwrap() };
@@ -485,4 +535,12 @@ impl std::fmt::Display for Address {
 fn parse_millis(value: &str) -> Result<Duration, &'static str> {
 	let millis: u64 = value.parse().map_err(|_| "expected a number of milliseconds")?;
 	Ok(Duration::from_millis(millis))
+}
+
+fn check_mtu_message_size(mtu: u16, max_payload_size: u32) -> Result<(), ()> {
+	if max_payload_size < u32::from(mtu) + 4 {
+		tracing::error!("invalid maximum message size ({max_payload_size}) for the given MTU ({mtu}): max message size must be at-least 4 bytes more than the MTU");
+		return Err(());
+	}
+	Ok(())
 }

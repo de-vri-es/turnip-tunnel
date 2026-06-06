@@ -10,6 +10,7 @@ pub struct Controller {
 	write_timeout: Duration,
 	read_timeout: Duration,
 	poll_timeout: Duration,
+	max_payload_size: u32,
 }
 
 impl Controller {
@@ -20,6 +21,7 @@ impl Controller {
 			read_timeout: Duration::from_millis(50),
 			write_timeout: Duration::from_millis(50),
 			poll_timeout: Duration::from_millis(10),
+			max_payload_size: crate::DEFAULT_MAX_PAYLOAD_SIZE,
 		})
 	}
 
@@ -35,17 +37,21 @@ impl Controller {
 		self.poll_timeout = timeout;
 	}
 
+	pub fn set_max_payload_size(&mut self, max_size: u32) {
+		self.max_payload_size = max_size;
+	}
+
 	pub async fn run(&mut self) -> Result<std::convert::Infallible, ()> {
 		let mut packets = vec![0u8; 65535];
 		let mut alive = true;
 		loop {
 			// Receive packets from the tunnel interface and transmit them over the serial port.
 			let payload_size = self.receive_from_interface(&mut packets).await?;
-			protocol::send_packets(&mut self.serial_port, &packets[..payload_size], self.write_timeout)
+			protocol::send_packets(&mut self.serial_port, &packets[..payload_size], self.write_timeout, self.max_payload_size)
 				.await
 				.map_err(|e| tracing::error!("Failed to write packet over serial port: {e}"))?;
 
-			let packets = match protocol::read_packets(&mut self.serial_port, self.read_timeout).await {
+			let packets = match protocol::read_packets(&mut self.serial_port, self.read_timeout, self.max_payload_size).await {
 				Ok(packets) => {
 					if !alive {
 						tracing::info!("Successfully received packets from serial port, connection is back");
