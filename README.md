@@ -1,12 +1,12 @@
 # turnip-tunnel
 
-`turnip` is a IP or Ethernet tunnel using a half-duplex serial port without any control flow signals as the transport channel.
+`turnip` is an IP or Ethernet tunnel using a half-duplex serial port without any control flow signals as the transport channel.
 
 To allow IP over a half-duplex serial line, each side of the serial link takes turns to transmit packets to the other side.
 Hence the name "turn IP", or "turnip".
 Additionally, the half-duplex serial port was invented around the same time as the turnip, and they are about equally technologically advanced.
 
-The princicple of operation is also shown by this diagram:
+The principle of operation is also shown by this diagram:
 <img src="https://raw.githubusercontent.com/de-vri-es/turnip-tunnel/main/principle-of-operation.svg" alt="diagram of two laptops connected to a root vegetable" width="100%"/>
 
 ## Feature comparison

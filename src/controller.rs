@@ -48,7 +48,7 @@ impl Controller {
 			let packets = match protocol::read_packets(&mut self.serial_port, self.read_timeout).await {
 				Ok(packets) => {
 					if !alive {
-						tracing::info!("Succesfully received packets from serial port, connection is back");
+						tracing::info!("Successfully received packets from serial port, connection is back");
 						alive = true;
 					}
 					packets

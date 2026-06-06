@@ -4,7 +4,7 @@
 //! Hence the name "turn IP", or "turnip".
 //! Additionally, the half-duplex serial port was invented around the same time as the turnip, and they are about equally technologically advanced.
 //!
-//! The princicple of operation is also shown by this diagram:
+//! The principle of operation is also shown by this diagram:
 //! <img src="https://raw.githubusercontent.com/de-vri-es/turnip-tunnel/main/principle-of-operation.svg" alt="diagram of two laptops connected to a root vegetable" width="100%"/>
 //!
 //! # Feature comparison
@@ -125,7 +125,7 @@ struct ControllerCommand {
 	#[clap(value_parser = parse_millis)]
 	pub poll_timeout: Duration,
 
-	/// Act as an link-layer tunnel instead of an IP tunnel.
+	/// Act as a link-layer tunnel instead of an IP tunnel.
 	///
 	/// On Linux this creates a TAP device instead of a TUN device.
 	#[clap(long)]
@@ -170,7 +170,7 @@ struct WorkerCommand {
 	#[clap(value_parser = parse_millis)]
 	pub write_timeout: Duration,
 
-	/// Act as an link-layer tunnel instead of an IP tunnel.
+	/// Act as a link-layer tunnel instead of an IP tunnel.
 	///
 	/// On Linux this creates a TAP device instead of a TUN device.
 	#[clap(long)]
@@ -224,7 +224,7 @@ struct LocalCommand {
 	#[clap(value_parser = parse_millis)]
 	pub poll_timeout: Duration,
 
-	/// Act as an link-layer tunnel instead of an IP tunnel.
+	/// Act as a link-layer tunnel instead of an IP tunnel.
 	///
 	/// On Linux this creates a TAP device instead of a TUN device.
 	#[clap(long)]
