@@ -25,7 +25,7 @@
 //!
 //! The tunnel works with `controller` and a `worker` side.
 //! They are essentially identical, except that the controller initiates all communication.
-//! The `worker` may only transmit over the serial line after it received a message from the `controller`.
+//! The `worker` may only transmit in direct response to a message from the `controller`.
 //! This is required to prevent message collisions on the half-duplex line.
 //!
 //! Even though the `worker` can not initiate communication,
@@ -42,6 +42,52 @@
 //!
 //! Most options have sane defaults, although you may need to increase timeout values when using lower baud rates.
 //! The only required options are the serial port (`--serial ...`) and the baud rate (`--baud`).
+//!
+//! # Error detection and retransmissions
+//!
+//! `turnip` focusses on simplicity over performance, and it sits below the transport layer (at L2 or L3, to be precise).
+//! This means that it can leave most of the error detection and retransmission to the upper layers of the network, and it does.
+//!
+//! To be precise, `turnip` only does it's best to re-synchronize the start and end of a frame if anything happens.
+//! It does not try to retransmit lost or damaged packets.
+//!
+//! If this makes you worry, don't: this is perfectly normal in networking.
+//! The transport layer is there precisely to allow the layers below it to be unreliable.
+//!
+//! An argument could be made for adding forward error correction, if the serial link is very noisy.
+//! Sacrificing bandwidth to reduce retransmission round-trips could result in a better throughput, and certainly better latency.
+//! A future version of `turnip` maybe include forward error correction.
+//!
+//! # Wire format
+//!
+//! The wire format of `turnip` is very simple.
+//! In a nutshell: each message starts with a preamble of `0x00`, `0xFF`, `0xFF`, `0x01`,
+//! a 32 bit payload length (number of bytes), and the payload.
+//!
+//! The payload itself is a sequence of packets.
+//! Each packet consists of a by a 32 bit packet size (number of bytes),
+//! followed by the packet data.
+//!
+//! All numbers are encoded as little endian.
+//! No byte stuffing is applied.
+//!
+//! The reason to use a length-demarked message instead of byte stuffing is that it allows the controller to respond as fast as possible.
+//! Because it knows the size of a message, it does not need to wait for the line to go silent to detect the end of a transmission.
+//!
+//! The following table shows the layout of a `turnip` message:
+//!
+//! | Field           | Size (bytes) | Description                                    |
+//! |-----------------|--------------|------------------------------------------------|
+//! | Preamble        | 4            | Fixed sequence: `0x00`, `0xFF`, `0xFF`, `0x01` |
+//! | Payload length  | 4            | Size of the message payload in bytes           |
+//! | Packet 1 length | 4            | Size of the first packet in bytes              |
+//! | Packet 1 data   | Variable     | First packet data                              |
+//! | ...             |              |                                                |
+//! | Packet N length | 4            | Size of the first packet in bytes              |
+//! | Packet N data   | Variable     | First packet data                              |
+//!
+//! The number of packets per message can be anything, including zero.
+//! However, the payload of a single message may not exceed 65535 bytes.
 
 #![forbid(unsafe_code)]
 
