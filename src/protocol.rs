@@ -4,6 +4,7 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt as _;
 
 const PREAMBLE: [u8; 4] = [0x00, 0xFF, 0xFF, 0x01];
+const MAX_PAYLOAD_SIZE: usize = 65535;
 
 #[derive(Debug)]
 pub enum Error {
@@ -27,7 +28,7 @@ impl std::fmt::Display for Error {
 			Self::InvalidMessagePayload { reason } => {
 				write!(f, "invalid message payload: {reason}")
 			}
-			Self::MessagePayloadTooLarge(length) => write!(f, "message payload too large: {length} bytes, maximum allowed is {}", u32::MAX),
+			Self::MessagePayloadTooLarge(length) => write!(f, "message payload too large: {length} bytes, maximum allowed is {}", MAX_PAYLOAD_SIZE),
 		}
 	}
 }
@@ -47,7 +48,10 @@ where
 		let packet_headers: Vec<[u8; 4]> = packets.iter().map(|x| (x.as_ref().len() as u32).to_le_bytes()).collect();
 		let total_packets_size: usize = packets.iter().map(|x| x.as_ref().len()).sum();
 		let message_size = packets.len() * 4 + total_packets_size;
-		let message_size: u32 = message_size.try_into().map_err(|_| Error::MessagePayloadTooLarge(message_size))?;
+		if message_size > MAX_PAYLOAD_SIZE {
+			return Err(Error::MessagePayloadTooLarge(message_size));
+		}
+		let message_size = message_size as u32;
 
 		tracing::trace!(
 			"Sending message with payload of {message_size} bytes, containing {} packets",
@@ -101,6 +105,12 @@ pub async fn read_packets(channel: &mut SerialPort, timeout: Duration) -> Result
 		}
 		let message_size = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
 		tracing::trace!("Receiving message with payload of {message_size} bytes");
+
+		if message_size > MAX_PAYLOAD_SIZE {
+			tracing::trace!("Incoming payload too large, refusing to parse, discarding input buffer.");
+			channel.discard_input_buffer().map_err(Error::SerialPort)?;
+			return Err(Error::MessagePayloadTooLarge(message_size));
+		}
 
 		let mut data = vec![0; message_size];
 		channel.read_exact(&mut data).await.map_err(Error::SerialPort)?;

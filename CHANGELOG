@@ -1,2 +1,5 @@
+# Unreleased
+- [fix][minor] Refuse to allocate buffer space for excessively large payloads.
+
 # Version 0.1.0 - 2026-06-04
 - [add][minor] Initial release
