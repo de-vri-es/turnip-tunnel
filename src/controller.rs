@@ -98,7 +98,10 @@ impl Controller {
 
 		let mut total_size = 0;
 		let packet_size = match tokio::time::timeout(self.poll_timeout, self.interface.recv(data_buffer)).await {
-			Err(tokio::time::error::Elapsed { .. }) => return Ok(0),
+			Err(tokio::time::error::Elapsed { .. }) => {
+				tracing::trace!("Timeout waiting for packet on tunnel interface, poll timeout: {:?}", self.poll_timeout);
+				return Ok(0);
+			},
 			Ok(Ok(0)) => {
 				tracing::error!("Read 0-sized packet from tunnel interface, interface was deleted?");
 				return Err(());
@@ -123,6 +126,7 @@ impl Controller {
 		// but only if they are directly available.
 		while let Some((len_buffer, data_buffer)) = payload_buffer.split_first_chunk_mut::<4>() {
 			if data_buffer.len() < mtu.into() {
+				tracing::trace!("Not enough space left in packet buffer to receive a full MTU");
 				break;
 			}
 			let packet_size = match self.interface.try_recv(data_buffer) {
@@ -132,6 +136,7 @@ impl Controller {
 				}
 				Err(e) => {
 					if e.kind() == std::io::ErrorKind::WouldBlock {
+						tracing::trace!("No more packets available from tunnel interface");
 						break;
 					} else {
 						tracing::error!("Failed to receive packet from tunnel interface: {e}");
