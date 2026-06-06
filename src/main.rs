@@ -451,10 +451,10 @@ impl LocalCommand {
 		worker.set_max_payload_size(*max_payload_size);
 
 		let span = tracing::span!(tracing::Level::INFO, "controller");
-		let controller = async move { tokio::spawn(async move { controller.run().instrument(span).await }).await.unwrap() };
+		let controller = controller.run().instrument(span);
 
 		let span = tracing::span!(tracing::Level::INFO, "worker");
-		let worker = async move { tokio::spawn(async move { worker.run().instrument(span).await }).await.unwrap() };
+		let worker = worker.run().instrument(span);
 
 		#[cfg(unix)]
 		sd_notify::notify(&[
