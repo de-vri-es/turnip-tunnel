@@ -61,8 +61,13 @@ impl Controller {
 					continue;
 				}
 				Err(e) => {
-					tracing::error!("Failed to read packet(s) from serial port: {e}");
-					return Err(());
+					tracing::error!("{e}");
+					if let Error::SerialPort(_) = e {
+						// Failure to read from the serial port is likely a permanent error, so return with an error.
+						return Err(());
+					} else {
+						continue;
+					}
 				}
 			};
 			for packet in &packets {
@@ -116,7 +121,7 @@ impl Controller {
 			}
 			let packet_size = match self.interface.try_recv(data_buffer) {
 				Ok(0) => {
-					tracing::error!("Read 0-sized packet from tunnel interface, interface was deleted?");
+					tracing::error!("Read 0-sized packet from tunnel interface");
 					return Err(());
 				}
 				Err(e) => {

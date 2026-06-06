@@ -9,7 +9,6 @@ pub const MAX_PAYLOAD_SIZE: usize = 65535;
 #[derive(Debug)]
 pub enum Error {
 	SerialPort(std::io::Error),
-	Interface(std::io::Error),
 	TimeoutElapsed,
 	InvalidPreamble { actual: [u8; 4] },
 	InvalidMessagePayload { reason: &'static str },
@@ -20,7 +19,6 @@ impl std::fmt::Display for Error {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			Self::SerialPort(e) => write!(f, "I/O error on serial port: {e}"),
-			Self::Interface(e) => write!(f, "I/O error on tunnel interface: {e}"),
 			Self::TimeoutElapsed => write!(f, "timeout elapsed"),
 			Self::InvalidPreamble { actual } => {
 				write!(f, "invalid message preamble: 0x{actual:02X?} (expected 0x{PREAMBLE:02X?})")

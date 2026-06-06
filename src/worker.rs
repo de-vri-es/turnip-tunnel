@@ -51,8 +51,17 @@ impl Worker {
 					continue;
 				}
 				Err(e) => {
-					tracing::error!("Failed to read packet(s) from serial port: {e}");
-					return Err(());
+					tracing::error!("{e}");
+					if let Error::SerialPort(_) = e {
+						// Failure to read from the serial port is likely a permanent error, so return with an error.
+						return Err(());
+					} else {
+						// NOTE: We did receive a message, but not correctly.
+						// We don't know exactly where the message ended, so don't reply.
+						// We might cause message collisions and make re-synchronization impossible.
+						tracing::warn!("Received damaged message from serial port, trying to re-synchronize on next message from controller.");
+						continue;
+					}
 				}
 			};
 
@@ -91,7 +100,7 @@ impl Worker {
 			// First transmit queued packets back over the serial port, since this is our only chance to do it.
 			protocol::send_packets(&mut self.serial_port, &packet_buffer[..total_size], self.write_timeout)
 				.await
-				.map_err(|e| tracing::error!("Failed to write packet(s) to serial port: {e}"))?;
+				.map_err(|e| tracing::error!("{e}"))?;
 
 			// Now deliver packets to the tunnel interface.
 			for packet in &packets {
