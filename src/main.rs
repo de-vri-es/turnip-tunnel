@@ -306,7 +306,7 @@ struct LocalCommand {
 
 	/// Maximum time to wait for a packet from the tunnel interface.
 	#[clap(long)]
-	#[clap(default_value = "50")]
+	#[clap(default_value = "10")]
 	#[clap(value_parser = parse_millis)]
 	pub poll_timeout: Duration,
 
