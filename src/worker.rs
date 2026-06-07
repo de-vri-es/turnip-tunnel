@@ -9,7 +9,7 @@ pub struct Worker {
 	interface: tun_rs::AsyncDevice,
 	write_timeout: Duration,
 	read_timeout: Duration,
-	max_payload_size: u32,
+	max_payload_size: usize,
 }
 
 impl Worker {
@@ -31,7 +31,7 @@ impl Worker {
 		self.write_timeout = timeout;
 	}
 
-	pub fn set_max_payload_size(&mut self, max_size: u32) {
+	pub fn set_max_payload_size(&mut self, max_size: usize) {
 		self.max_payload_size = max_size;
 	}
 
@@ -75,9 +75,9 @@ impl Worker {
 				.map_err(|e| tracing::error!("Failed to query interface MTU: {e}"))?;
 
 			// Collect packets from the tunnel interface (without waiting).
-			let mut packet_buffer: Vec<u8> = vec![0; self.max_payload_size as usize];
+			let mut packet_buffer: Vec<u8> = vec![0; self.max_payload_size];
 			let mut total_size = 0;
-			while let Some((len_buffer, data_buffer)) = packet_buffer[total_size..].split_first_chunk_mut::<4>() {
+			while let Some((len_buffer, data_buffer)) = packet_buffer[total_size..].split_first_chunk_mut() {
 				// Stop parsing if the buffer is too small for a full packet (except if this is the first packet).
 				if total_size > 0 && data_buffer.len() < mtu.into() {
 					break;
@@ -89,8 +89,16 @@ impl Worker {
 					}
 					Ok(packet_size) => {
 						tracing::debug!("Received packet of {packet_size} bytes from tunnel interface");
-						*len_buffer = (packet_size as u32).to_le_bytes();
-						total_size += 4 + packet_size;
+						match u16::try_from(packet_size) {
+							Ok(packet_size) => {
+								*len_buffer = packet_size.to_le_bytes();
+								total_size += std::mem::size_of_val(&packet_size) + usize::from(packet_size);
+							}
+							Err(_) => {
+								tracing::warn!("Dropping extremely large packet ({packet_size} bytes) received from tunnel interface");
+								continue;
+							}
+						}
 					}
 					Err(e) => {
 						if e.kind() == std::io::ErrorKind::WouldBlock {

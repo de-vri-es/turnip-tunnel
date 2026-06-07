@@ -48,7 +48,7 @@
 //! `turnip` focusses on simplicity over performance, and it sits below the transport layer (at L2 or L3, to be precise).
 //! This means that it can leave most of the error detection and retransmission to the upper layers of the network, and it does.
 //!
-//! To be precise, `turnip` only does it's best to re-synchronize the start and end of a frame if anything happens.
+//! To be precise, `turnip` only does its best to re-synchronize the start and end of a frame if anything happens.
 //! It does not try to retransmit lost or damaged packets.
 //!
 //! If this makes you worry, don't: this is perfectly normal in networking.
@@ -56,38 +56,40 @@
 //!
 //! An argument could be made for adding forward error correction, if the serial link is very noisy.
 //! Sacrificing bandwidth to reduce retransmission round-trips could result in a better throughput, and certainly better latency.
-//! A future version of `turnip` maybe include forward error correction.
+//! A future version of `turnip` may include forward error correction.
 //!
 //! # Wire format
 //!
 //! The wire format of `turnip` is very simple.
-//! In a nutshell: each message starts with a preamble of `0x00`, `0xFF`, `0xFF`, `0x01`,
-//! a 32 bit payload length (number of bytes), and the payload.
+//! In a nutshell: each message starts with a preamble of `0x00 0xFF 0xFF 0x01`,
+//! followed by a [COBS] (Consistent Overhead Byte Stuffing) encoded payload.
+//! The COBS encoding ensures that there are no `0x00` bytes in the payload itself,
+//! and it adds a `0x00` byte after the payload to mark the end of the message.
 //!
-//! The payload itself is a sequence of packets.
-//! Each packet consists of a by a 32 bit packet size (number of bytes),
-//! followed by the packet data.
-//!
-//! All numbers are encoded as little endian.
-//! No byte stuffing is applied.
-//!
-//! The reason to use a length-demarked message instead of byte stuffing is that it allows the controller to respond as fast as possible.
-//! Because it knows the size of a message, it does not need to wait for the line to go silent to detect the end of a transmission.
+//! The payload itself is a packet list, which is the concatenation of a 16-bit packet length (little endian) and the packet data, for each packet.
+//! Keep in mind, it has to be COBS encoded after the concatenation.
 //!
 //! The following table shows the layout of a `turnip` message:
 //!
+//! | Field           | Size (bytes) | Description                    |
+//! |-----------------|--------------|--------------------------------|
+//! | Preamble        | 4            | `0x00`, `0xFF`, `0xFF`, `0x01` |
+//! | Payload         | Variable     | COBS encoded payload           |
+//!
+//! And the layout of the payload (before COBS encoding) is shown by this table:
+//!
 //! | Field           | Size (bytes) | Description                                    |
 //! |-----------------|--------------|------------------------------------------------|
-//! | Preamble        | 4            | Fixed sequence: `0x00`, `0xFF`, `0xFF`, `0x01` |
-//! | Payload length  | 4            | Size of the message payload in bytes           |
-//! | Packet 1 length | 4            | Size of the first packet in bytes              |
-//! | Packet 1 data   | Variable     | First packet data                              |
+//! | Packet 1 length | 2            | The size in bytes of packet 1                  |
+//! | Packet 1 data   | Variable     | The data of packet 1                           |
 //! | ...             |              |                                                |
-//! | Packet N length | 4            | Size of the first packet in bytes              |
-//! | Packet N data   | Variable     | First packet data                              |
+//! | Packet N length | 2            | The size in bytes of packet N                  |
+//! | Packet N data   | Variable     | The data of packet N                           |
 //!
-//! The number of packets per message can be anything, including zero.
-//! However, the payload of a single message may not exceed 65535 bytes.
+//! A packet list can contain any number of packets, including zero.
+//! Note that COBS encoding still means that the minimum size of the payload is 2 bytes, even when the packet list is empty.
+//!
+//! [COBS]: https://en.wikipedia.org/wiki/Consistent_Overhead_Byte_Stuffing
 
 #![forbid(unsafe_code)]
 
@@ -107,7 +109,7 @@ mod protocol;
 mod worker;
 
 const DEFAULT_MTU: u16 = 512;
-const DEFAULT_MAX_PAYLOAD_SIZE: u32 = (512 + 4) * 2;
+const DEFAULT_MAX_PAYLOAD_SIZE: usize = (DEFAULT_MTU as usize + 2) * 2; // Enough space for two MTU sized packets with their length.
 
 #[derive(clap::Parser)]
 struct Options {
@@ -161,11 +163,11 @@ struct ControllerCommand {
 	/// But `turnip` may send multiple packets in a single message,
 	/// to improve througput when the packets are very small.
 	///
-	/// The maximum message size should always allow for at-least the MTU plus 4 bytes overhead.
+	/// The maximum message size should always allow for at-least the MTU plus 2 bytes overhead.
 	///
 	/// If not given, it defaults to the MTU * 2 + 8 bytes.
 	#[clap(long)]
-	pub max_payload_size: Option<u32>,
+	pub max_payload_size: Option<usize>,
 
 	/// Timeout for reading a message from the serial port.
 	#[clap(long)]
@@ -225,11 +227,11 @@ struct WorkerCommand {
 	/// But `turnip` may send multiple packets in a single message,
 	/// to improve througput when the packets are very small.
 	///
-	/// The maximum message size should always allow for at-least the MTU plus 4 bytes overhead.
+	/// The maximum message size should always allow for at-least the MTU plus 2 bytes overhead.
 	///
 	/// If not given, it defaults to the MTU * 2 + 8 bytes.
 	#[clap(long)]
-	pub max_payload_size: Option<u32>,
+	pub max_payload_size: Option<usize>,
 
 	/// Timeout for reading a message from the serial port.
 	#[clap(long)]
@@ -286,11 +288,11 @@ struct LocalCommand {
 	/// But `turnip` may send multiple packets in a single message,
 	/// to improve througput when the packets are very small.
 	///
-	/// The maximum message size should always allow for at-least the MTU plus 4 bytes overhead.
+	/// The maximum message size should always allow for at-least the MTU plus 2 bytes overhead.
 	///
 	/// If not given, it defaults to the MTU * 2 + 8 bytes.
 	#[clap(long)]
-	pub max_payload_size: Option<u32>,
+	pub max_payload_size: Option<usize>,
 
 	/// Timeout for reading a message from the serial port.
 	#[clap(long)]
@@ -551,15 +553,16 @@ fn parse_millis(value: &str) -> Result<Duration, &'static str> {
 	Ok(Duration::from_millis(millis))
 }
 
-fn check_mtu_message_size(mtu: u16, max_payload_size: Option<u32>) -> Result<u32, ()> {
+fn check_mtu_message_size(mtu: u16, max_payload_size: Option<usize>) -> Result<usize, ()> {
+	let mtu = usize::from(mtu);
 	if mtu < 64 {
 		tracing::error!("invalid --mtu value: may not be less than 64 bytes");
 	}
 	match max_payload_size {
-		None => Ok(u32::from(mtu) * 2 + 8),
+		None => Ok(mtu * 2 + 8),
 		Some(max_payload_size) => {
-			if max_payload_size < u32::from(mtu) + 4 {
-				tracing::error!("invalid --max-payload-size and --mtu combination: --max-payload-size must be at-least 4 bytes more than the MTU");
+			if max_payload_size < mtu + 2 {
+				tracing::error!("invalid --max-payload-size and --mtu combination: --max-payload-size must be at-least 2 bytes more than the MTU");
 				return Err(());
 			}
 			Ok(max_payload_size)

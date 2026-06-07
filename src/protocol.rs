@@ -10,7 +10,10 @@ pub enum Error {
 	SerialPort(std::io::Error),
 	TimeoutElapsed,
 	InvalidMessagePayload { reason: &'static str },
-	MessagePayloadTooLarge { actual: usize, max: u32 },
+	/// Payload of outgoing message is too large.
+	MessagePayloadTooLarge { actual: usize, max_payload_size: usize },
+	/// Payload of incoming message is too large (the buffer is full before we found the end).
+	BufferFull { max_payload_size: usize },
 }
 
 impl std::fmt::Display for Error {
@@ -21,7 +24,8 @@ impl std::fmt::Display for Error {
 			Self::InvalidMessagePayload { reason } => {
 				write!(f, "invalid message payload: {reason}")
 			}
-			Self::MessagePayloadTooLarge { actual, max } => write!(f, "message payload too large: {actual} bytes, maximum allowed is {max}"),
+			Self::MessagePayloadTooLarge { actual, max_payload_size } => write!(f, "message payload too large: {actual} bytes, maximum allowed is {max_payload_size}"),
+			Self::BufferFull { max_payload_size } => write!(f, "incoming message too large: receive buffer is already full ({max_payload_size} bytes)"),
 		}
 	}
 }
@@ -33,25 +37,25 @@ impl From<tokio::time::error::Elapsed> for Error {
 }
 
 #[tracing::instrument(skip(channel, packets))]
-pub async fn send_packets(channel: &mut SerialPort, packets: &[u8], timeout: Duration, max_payload_size: u32) -> Result<(), Error> {
+pub async fn send_packets(channel: &mut SerialPort, packets: &[u8], timeout: Duration, max_payload_size: usize) -> Result<(), Error> {
+	if packets.len() > max_payload_size {
+		return Err(Error::MessagePayloadTooLarge { actual: packets.len(), max_payload_size });
+	}
+
+	let mut stuffed = Vec::new();
+	corncobs::encode(packets, &mut stuffed);
+
 	let work = async {
-		if packets.len() > max_payload_size as usize {
-			return Err(Error::MessagePayloadTooLarge { actual: packets.len(), max: max_payload_size });
-		}
-		let message_size = packets.len() as u32;
 
 		tracing::trace!(
-			"Sending message with payload of {message_size} bytes, containing {} packets",
-			packets.len()
+			"Sending message with payload of {} bytes ({} after byte-stuffing)",
+			packets.len(),
+			stuffed.len(),
 		);
 
-		let mut frame_header = [0u8; 8];
-		frame_header[0..4].copy_from_slice(&PREAMBLE);
-		frame_header[4..8].copy_from_slice(&message_size.to_le_bytes());
-
 		let mut slices = [
-			IoSlice::new(&frame_header),
-			IoSlice::new(packets),
+			IoSlice::new(&PREAMBLE),
+			IoSlice::new(&stuffed),
 		];
 		let mut slices = &mut slices[..];
 
@@ -69,49 +73,68 @@ pub async fn send_packets(channel: &mut SerialPort, packets: &[u8], timeout: Dur
 }
 
 #[tracing::instrument(skip(channel))]
-pub async fn read_packets(channel: &mut SerialPort, timeout: Duration, max_payload_size: u32) -> Result<Packets, Error> {
+pub async fn read_packets(channel: &mut SerialPort, timeout: Duration, max_payload_size: usize) -> Result<Packets, Error> {
 	let work = async {
-		// Read a header, discarding any non-preamble data.
-		let mut buffer = vec![0; max_payload_size as usize];
+		let mut buffer = vec![0; corncobs::max_encoded_len(max_payload_size)];
 		let mut filled = 0;
-		loop {
-			let this_read = channel.read(&mut buffer[filled..]).await.map_err(Error::SerialPort)?;
-			tracing::trace!("Read {this_read} bytes: 0x{:02X?}", &buffer[filled..this_read]);
-			filled += this_read;
-			let preamble_offset = scan_preample_start(&buffer[..filled]);
+
+		let message_end = loop {
+			if filled == buffer.len() {
+				tracing::trace!("Receive buffer is full, discarding input buffer and raising an error.");
+				channel.discard_input_buffer().map_err(Error::SerialPort)?;
+				return Err(Error::BufferFull { max_payload_size });
+			}
+
+			let read_bytes = channel.read(&mut buffer[filled..]).await.map_err(Error::SerialPort)?;
+			if read_bytes == 0 {
+				// NOTE: Reading 0 is no guarantee you will always read 0.
+				// But at the moment, in practise, for [`serial2_tokio::SerialPort`], it does mean that.
+				return Err(Error::SerialPort(std::io::ErrorKind::UnexpectedEof.into()));
+			}
+			tracing::trace!("Read {read_bytes} bytes: 0x{:02X?}",  &buffer[filled..][..read_bytes]);
+			filled += read_bytes;
+			let preamble_offset = scan_preamble_start(&buffer[..filled]);
 			if preamble_offset != 0 {
 				tracing::warn!("Discarding {preamble_offset} garbage bytes");
 				buffer.copy_within(preamble_offset..filled, 0);
 				filled -= preamble_offset;
 			}
 
-			// If we don't have a full header after removing garbage, try to read more data.
-			if filled < 8 {
+			// If we don't have a full message after removing garbage, try to read more data.
+			if filled < 5 {
 				continue;
 			}
 
-			let payload_size = u32::from_le_bytes(buffer[4..8].try_into().unwrap()) as usize;
-			tracing::trace!("Received message header with payload of {payload_size} bytes");
-			if payload_size > max_payload_size as usize {
-				tracing::trace!("Incoming payload too large, refusing to parse, discarding input buffer.");
-				channel.discard_input_buffer().map_err(Error::SerialPort)?;
-				return Err(Error::MessagePayloadTooLarge { actual: payload_size, max: max_payload_size });
-			}
+			let scan_from = filled.saturating_sub(read_bytes).clamp(PREAMBLE.len(), usize::MAX);
+			// Find the terminating 0 byte of the message, or continue to read more data.
+			match buffer[scan_from..filled].iter().position(|&x| x == 0) {
+				Some(i) => break scan_from + i + 1, // + 1 to include the zero byte itself
+				None => continue,
+			};
+		};
 
-			if filled >= 8 + payload_size {
-				break;
-			}
+		if filled > message_end{
+			tracing::warn!("Discarding {} trailing garbage bytes", filled - message_end);
 		}
 
-		buffer.truncate(filled);
-		Packets::from_message(buffer)
+		let stuffed_payload = &buffer[PREAMBLE.len()..message_end];
+		tracing::trace!("Received stuffed payload of {} bytes", stuffed_payload.len());
+
+		let mut unstuffed_payload = Vec::new();
+		corncobs::decode(stuffed_payload, &mut unstuffed_payload)
+			.map_err(|e| match e {
+				corncobs::CobsError::Truncated => Error::InvalidMessagePayload { reason: "incomplete COBS payload" },
+				corncobs::CobsError::Corrupt => unreachable!("the payload was terminated at the first zero byte, so it can not contain one"),
+			})?;
+
+		Packets::from_payload(unstuffed_payload)
 	};
 
 	tokio::time::timeout(timeout, work).await?
 }
 
 /// Scan a buffer for a (possible) start of the preamble.
-fn scan_preample_start(input: &[u8]) -> usize {
+fn scan_preamble_start(input: &[u8]) -> usize {
 	for i in 0..input.len() {
 		if input[i..].iter().zip(&PREAMBLE).all(|(a, b)| a == b) {
 			return i;
@@ -120,34 +143,32 @@ fn scan_preample_start(input: &[u8]) -> usize {
 	input.len()
 }
 
-#[derive(Debug)]
 pub struct Packets {
 	data: Vec<u8>,
 	packets: Vec<std::ops::Range<usize>>,
 }
 
 impl Packets {
-	/// Take ownership of a buffer and parse it as a message containing packets.
-	///
-	/// The first 8 header bytes are skipped, but not checked for errors.
-	fn from_message(data: Vec<u8>) -> Result<Self, Error> {
+	/// Take ownership of a buffer and parse it as a payload containing packets.
+	fn from_payload(data: Vec<u8>) -> Result<Self, Error> {
 		let mut packets = Vec::new();
-		let mut index = 8;
+		let mut index = 0;
 		while index < data.len() {
-			let packet_len = data.get(index..index + 4).ok_or(Error::InvalidMessagePayload {
-				reason: "malformed packet length",
-			})?;
-			let packet_len: usize = u32::from_le_bytes(packet_len.try_into().unwrap())
-				.try_into()
-				.expect("u32 should always fit in usize");
+			let (packet_len, rest) = data[index..].split_first_chunk()
+				.ok_or(Error::InvalidMessagePayload {
+					reason: "malformed packet length",
+				})?;
+			let packet_len = u16::from_le_bytes(*packet_len);
 
-			if data.len() < index + 4 + packet_len {
+			if rest.len() < packet_len.into() {
 				return Err(Error::InvalidMessagePayload {
 					reason: "missing packet data",
 				});
 			}
-			packets.push(index + 4..index + 4 + packet_len);
-			index += 4 + packet_len;
+			let packet_start = index + std::mem::size_of_val(&packet_len);
+			let packet_end = packet_start + usize::from(packet_len);
+			packets.push(packet_start..packet_end);
+			index = packet_end;
 		}
 
 		Ok(Self { data, packets })
@@ -170,6 +191,20 @@ impl Packets {
 
 	pub fn to_vec(&self) -> Vec<&[u8]> {
 		self.iter().collect()
+	}
+}
+
+impl std::fmt::Debug for Packets {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_tuple("Packets")
+			.field(&std::fmt::from_fn(|f| {
+				let mut list = f.debug_list();
+				for packet in self {
+					list.entry(&format_args!("0x{packet:02X?}"));
+				}
+				list.finish()
+			}))
+			.finish()
 	}
 }
 
@@ -237,13 +272,13 @@ mod tests {
 	use super::*;
 
 	const TIMEOUT: Duration = Duration::from_millis(50);
-	const MAX_PAYLOAD_SIZE: u32 = 516;
+	const MAX_PAYLOAD_SIZE: usize = 516;
 
 	/// Build a payload containing the given packets (without message header).
 	fn encode_packets(packets: &[&[u8]]) -> Vec<u8> {
 		let mut payload = Vec::new();
 		for packet in packets {
-			payload.extend_from_slice(&(packet.len() as u32).to_le_bytes());
+			payload.extend_from_slice(&(packet.len() as u16).to_le_bytes());
 			payload.extend_from_slice(packet);
 		}
 		payload
@@ -253,86 +288,91 @@ mod tests {
 	fn encode_message(packets: &[&[u8]]) -> Vec<u8> {
 		let mut message = Vec::new();
 		message.extend_from_slice(&PREAMBLE);
-		message.extend_from_slice(&[0, 0, 0, 0]);
-		for packet in packets {
-			message.extend_from_slice(&(packet.len() as u32).to_le_bytes());
-			message.extend_from_slice(packet);
-		}
-		let payload_len = (message.len() - 8) as u32;
-		message[4..8].copy_from_slice(&payload_len.to_le_bytes());
+		corncobs::encode(&encode_packets(packets), &mut message);
 		message
 	}
 
 	#[test]
-	fn parse_empty_message() {
-		assert!(let Ok(packets) = Packets::from_message(vec![]));
+	#[tracing_test::traced_test]
+	fn parse_empty_payload() {
+		assert!(let Ok(packets) = Packets::from_payload(vec![]));
 		assert!(packets.is_empty());
 	}
 
 	#[test]
+	#[tracing_test::traced_test]
 	fn parse_single_packet() {
-		let message = encode_message(&[b"hello"]);
-		assert!(let Ok(packets) = Packets::from_message(message));
+		let payload = encode_packets(&[b"hello"]);
+		assert!(let Ok(packets) = Packets::from_payload(payload));
 		assert!(packets.to_vec() == &[b"hello".as_slice()]);
 	}
 
 	#[test]
+	#[tracing_test::traced_test]
 	fn parse_multiple_packets() {
-		let message = encode_message(&[b"aaa", b"bb", b"c"]);
-		assert!(let Ok(packets) = Packets::from_message(message));
+		let payload = encode_packets(&[b"aaa", b"bb", b"c"]);
+		assert!(let Ok(packets) = Packets::from_payload(payload));
 		assert!(packets.to_vec() == &["aaa".as_bytes(), "bb".as_bytes(), "c".as_bytes()]);
 	}
 
 	#[test]
+	#[tracing_test::traced_test]
 	fn parse_zero_length_packet() {
-		let message = encode_message(&[b""]);
-		assert!(let Ok(packets) = Packets::from_message(message));
+		let payload = encode_packets(&[b""]);
+		assert!(let Ok(packets) = Packets::from_payload(payload));
 		assert!(packets.to_vec() == &[b""]);
 	}
 
 	#[test]
+	#[tracing_test::traced_test]
 	fn parse_truncated_packet_length() {
-		// Only 2 bytes where a 4-byte length header is expected.
-		let mut message = encode_message(&[b""]);
-		message.truncate(message.len() - 2);
-		assert!(let Err(Error::InvalidMessagePayload { .. }) = Packets::from_message(message));
+		// Only 1 byte where a 2-byte length header is expected.
+		let mut payload = encode_packets(&[b""]);
+		payload.truncate(payload.len() - 1);
+		assert!(let Err(Error::InvalidMessagePayload { .. }) = Packets::from_payload(payload));
 	}
 
 	#[test]
+	#[tracing_test::traced_test]
 	fn parse_truncated_packet_data() {
 		// Header says 10 bytes, but only 3 are present.
-		let mut data = encode_message(&[b"0123456789"]);
+		let mut data = encode_packets(&[b"0123456789"]);
 		data.truncate(data.len() - 7);
-		assert!(let Err(Error::InvalidMessagePayload { .. }) = Packets::from_message(data));
+		assert!(let Err(Error::InvalidMessagePayload { .. }) = Packets::from_payload(data));
 	}
 
 
 	#[test]
+	#[tracing_test::traced_test]
 	fn scan_finds_preamble_at_start() {
 		let input = [0x00, 0xFF, 0xFF, 0x01, 0xAA, 0xBB, 0xCC, 0xDD];
-		assert!(scan_preample_start(&input) == 0);
+		assert!(scan_preamble_start(&input) == 0);
 	}
 
 	#[test]
+	#[tracing_test::traced_test]
 	fn scan_finds_preamble_after_garbage() {
 		let input = [0xAA, 0xBB, 0x00, 0xFF, 0xFF, 0x01, 0xCC, 0xDD];
-		assert!(scan_preample_start(&input) == 2);
+		assert!(scan_preamble_start(&input) == 2);
 	}
 
 	#[test]
+	#[tracing_test::traced_test]
 	fn scan_finds_partial_preamble_at_end() {
 		// Only first 2 bytes of preamble at the end, still a valid start.
 		let input = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0xFF];
-		assert!(scan_preample_start(&input) == 6);
+		assert!(scan_preamble_start(&input) == 6);
 	}
 
 	#[test]
+	#[tracing_test::traced_test]
 	fn scan_returns_length_for_no_match() {
 		let input = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22];
-		assert!(scan_preample_start(&input) == input.len());
+		assert!(scan_preamble_start(&input) == input.len());
 	}
 
 	#[tokio::test]
+	#[tracing_test::traced_test]
 	async fn read_skips_garbage_before_preamble() {
 		assert!(let Ok((tx, mut rx)) = SerialPort::pair());
 		let message = encode_message(&[b"data"]);
@@ -346,6 +386,7 @@ mod tests {
 	}
 
 	#[tokio::test]
+	#[tracing_test::traced_test]
 	async fn read_skips_partial_preamble_in_garbage() {
 		assert!(let Ok((tx, mut rx)) = SerialPort::pair());
 		let message = encode_message(&[b"ok"]);
@@ -359,22 +400,20 @@ mod tests {
 	}
 
 	#[tokio::test]
+	#[tracing_test::traced_test]
 	async fn read_rejects_oversized_payload() {
 		assert!(let Ok((tx, mut rx)) = SerialPort::pair());
 
-		// Craft a header with a payload size exceeding MAX_PAYLOAD_SIZE.
-		let mut message = Vec::new();
-		message.extend_from_slice(&PREAMBLE);
-		let oversized = MAX_PAYLOAD_SIZE + 1;
-		message.extend_from_slice(&oversized.to_le_bytes());
+		let message = encode_message(&[b"very big"]);
+		let max_payload_size = 7; // Smaller than "very big".
+
 		assert!(let Ok(()) = tx.write_all(&message).await);
 
-		assert!(let Err(Error::MessagePayloadTooLarge { actual, max }) = read_packets(&mut rx, TIMEOUT, MAX_PAYLOAD_SIZE).await);
-		assert!(actual == (MAX_PAYLOAD_SIZE as usize) + 1);
-		assert!(max == MAX_PAYLOAD_SIZE);
+		assert!(let Err(Error::BufferFull { max_payload_size: 7 }) = read_packets(&mut rx, TIMEOUT, max_payload_size).await);
 	}
 
 	#[tokio::test]
+	#[tracing_test::traced_test]
 	async fn read_times_out_on_no_data() {
 		assert!(let Ok((_tx, mut rx)) = SerialPort::pair());
 		assert!(let Err(Error::TimeoutElapsed) = read_packets(&mut rx, TIMEOUT, MAX_PAYLOAD_SIZE).await);
@@ -382,6 +421,7 @@ mod tests {
 
 
 	#[tokio::test]
+	#[tracing_test::traced_test]
 	async fn roundtrip_empty_message() {
 		assert!(let Ok((mut a, mut b)) = SerialPort::pair());
 		assert!(let Ok(()) = send_packets(&mut a, &[], TIMEOUT, MAX_PAYLOAD_SIZE).await);
@@ -391,6 +431,7 @@ mod tests {
 	}
 
 	#[tokio::test]
+	#[tracing_test::traced_test]
 	async fn roundtrip_single_packet() {
 		assert!(let Ok((mut a, mut b)) = SerialPort::pair());
 		assert!(let Ok(()) = send_packets(&mut a, &encode_packets(&[b"roundtrip"]), TIMEOUT, MAX_PAYLOAD_SIZE).await);
@@ -400,6 +441,7 @@ mod tests {
 	}
 
 	#[tokio::test]
+	#[tracing_test::traced_test]
 	async fn roundtrip_multiple_packets() {
 		assert!(let Ok((mut a, mut b)) = SerialPort::pair());
 		assert!(let Ok(()) = send_packets(&mut a, &encode_packets(&[b"alpha", b"beta", b"gamma"]), TIMEOUT, MAX_PAYLOAD_SIZE).await);
@@ -409,6 +451,7 @@ mod tests {
 	}
 
 	#[tokio::test]
+	#[tracing_test::traced_test]
 	async fn roundtrip_two_consecutive_messages() {
 		assert!(let Ok((mut a, mut b)) = SerialPort::pair());
 
@@ -422,6 +465,7 @@ mod tests {
 	}
 
 	#[tokio::test]
+	#[tracing_test::traced_test]
 	async fn recovery_after_garbage_between_messages() {
 		assert!(let Ok((mut a, mut b)) = SerialPort::pair());
 

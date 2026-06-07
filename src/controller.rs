@@ -10,7 +10,7 @@ pub struct Controller {
 	write_timeout: Duration,
 	read_timeout: Duration,
 	poll_timeout: Duration,
-	max_payload_size: u32,
+	max_payload_size: usize,
 }
 
 impl Controller {
@@ -37,7 +37,7 @@ impl Controller {
 		self.poll_timeout = timeout;
 	}
 
-	pub fn set_max_payload_size(&mut self, max_size: u32) {
+	pub fn set_max_payload_size(&mut self, max_size: usize) {
 		self.max_payload_size = max_size;
 	}
 
@@ -91,8 +91,8 @@ impl Controller {
 	/// Waits up to `self.poll_timeout` for the first packet to be available,
 	/// then reads any directly available packets until the buffer is full.
 	async fn receive_from_interface(&mut self, payload_buffer: &mut [u8]) -> Result<usize, ()> {
-		// First parse one packet asynchronousy with a timeout.
-		let Some((len_buffer, data_buffer)) = payload_buffer.split_first_chunk_mut::<4>() else {
+		// First parse one packet asynchronously with a timeout.
+		let Some((len_buffer, data_buffer)) = payload_buffer.split_first_chunk_mut() else {
 			return Ok(0);
 		};
 
@@ -110,21 +110,31 @@ impl Controller {
 				tracing::error!("Failed to receive packet from tunnel interface: {e}");
 				return Err(());
 			}
-			Ok(Ok(size)) => {
-				tracing::debug!("Received packet of {} bytes from tunnel interface", size);
-				size
+			Ok(Ok(packet_size)) => {
+				tracing::debug!("Received packet of {packet_size} bytes from tunnel interface");
+				match u16::try_from(packet_size) {
+					Ok(packet_size) => packet_size,
+					Err(_) => {
+						tracing::warn!("Dropping extremely large packet ({packet_size} bytes) received from tunnel interface");
+						0
+					}
+				}
 			}
 		};
 
-		total_size += 4 + packet_size;
-		*len_buffer = (packet_size as u32).to_le_bytes();
+		// We used a packet size of 0 to indicate we received but dropped a packet.
+		// If we did an actual 0 sized read we already returned an error.
+		if packet_size > 0 {
+			total_size += std::mem::size_of::<u16>() + usize::from(packet_size);
+			*len_buffer = packet_size.to_le_bytes();
+		}
 
 		let mtu = self.interface.mtu()
 			.map_err(|e| tracing::error!("Failed to query interface MTU: {e}"))?;
 
 		// Then opportunistically try reading more packets until the buffer is full,
 		// but only if they are directly available.
-		while let Some((len_buffer, data_buffer)) = payload_buffer.split_first_chunk_mut::<4>() {
+		while let Some((len_buffer, data_buffer)) = payload_buffer[total_size..].split_first_chunk_mut() {
 			if data_buffer.len() < mtu.into() {
 				tracing::trace!("Not enough space left in packet buffer to receive a full MTU");
 				break;
@@ -143,16 +153,21 @@ impl Controller {
 						return Err(());
 					}
 				}
-				Ok(size) => {
-					tracing::debug!("Received packet of {} bytes from tunnel interface", size);
-					size
+				Ok(packet_size) => {
+					tracing::debug!("Received packet of {packet_size} bytes from tunnel interface");
+					match u16::try_from(packet_size) {
+						Ok(packet_size) => packet_size,
+						Err(_) => {
+							tracing::warn!("Dropping extremely large packet ({packet_size} bytes) received from tunnel interface");
+							continue;
+						}
+					}
 				}
 			};
-			total_size += 4 + packet_size;
-			*len_buffer = (packet_size as u32).to_le_bytes();
+			total_size += std::mem::size_of_val(&packet_size) + usize::from(packet_size);
+			*len_buffer = packet_size.to_le_bytes();
 		}
 
 		Ok(total_size)
 	}
 }
-

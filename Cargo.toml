@@ -5,7 +5,7 @@ description = "IP/Ethernet tunnel backed by a half-duplex serial port"
 repository = "https://github.com/de-vri-es/turnip-tunnel"
 license = "MIT"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.93"
 
 publish = ["crates-io"]
 keywords = ["tunnel", "IP", "TUN", "half-duplex", "serial"]
@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5.58", features = ["derive"] }
+corncobs = { version = "0.1.4", features = ["std"] }
 serial2-tokio = { version = "0.1.23", features = ["unix"] }
 tokio = { version = "1.49.0", features = ["rt-multi-thread", "net", "macros", "io-util", "time"] }
 tracing = { version = "0.1.44", features = ["async-await"] }
@@ -31,3 +32,4 @@ strip = true
 
 [dev-dependencies]
 assert2 = "0.4.0"
+tracing-test = "0.2.6"
