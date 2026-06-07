@@ -527,7 +527,7 @@ dependencies = [
  "nix 0.30.1",
  "scopeguard",
  "system-configuration-sys",
- "thiserror",
+ "thiserror 2.0.18",
  "widestring",
  "windows",
 ]
@@ -574,6 +574,28 @@ dependencies = [
  "bytes",
  "libc",
  "log",
+]
+
+[[package]]
+name = "netns-rs"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "344d87cf1178954a3e8c0b3fd537b9966a8748c83734798f9c25cbcfc26467e3"
+dependencies = [
+ "nix 0.29.0",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
@@ -893,11 +915,31 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+dependencies = [
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
 version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 2.0.18",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1095,6 +1137,8 @@ dependencies = [
  "assert2",
  "clap",
  "corncobs",
+ "libc",
+ "netns-rs",
  "sd-notify",
  "serial2-tokio",
  "tokio",

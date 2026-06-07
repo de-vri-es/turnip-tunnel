@@ -103,6 +103,7 @@ use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::controller::Controller;
+use crate::worker::Worker;
 
 mod controller;
 mod protocol;
@@ -145,6 +146,14 @@ struct ControllerCommand {
 	#[clap(short, long)]
 	#[clap(value_name = "NAME")]
 	pub interface: Option<String>,
+
+	/// Create the tunnel interface in the given network namespace.
+	///
+	/// The network namespace can be created ahead of time with the `ip netns` tool on Linux.
+	/// If the network namespace does not exist yet, it will be created.
+	#[clap(long)]
+	#[cfg(feature = "netns")]
+	pub netns: Option<String>,
 
 	/// Addresses to add to the tunnel interface.
 	#[clap(short, long)]
@@ -210,6 +219,14 @@ struct WorkerCommand {
 	#[clap(value_name = "NAME")]
 	pub interface: Option<String>,
 
+	/// Create the tunnel interface in the given network namespace.
+	///
+	/// The network namespace can be created ahead of time with the `ip netns` tool on Linux.
+	/// If the network namespace does not exist yet, it will be created.
+	#[clap(long)]
+	#[cfg(feature = "netns")]
+	pub netns: Option<String>,
+
 	/// Addresses to add to the tunnel interface.
 	#[clap(short, long)]
 	#[clap(value_name = "ADDRESS[/NETMASK]")]
@@ -266,10 +283,26 @@ struct LocalCommand {
 	#[clap(value_name = "ADDRESS[/NETMASK]")]
 	pub controller_address: Vec<Address>,
 
+	/// Create the tunnel interface for the controller in the given network namespace.
+	///
+	/// The network namespace can be created ahead of time with the `ip netns` tool on Linux.
+	/// If the network namespace does not exist yet, it will be created.
+	#[clap(long)]
+	#[cfg(feature = "netns")]
+	pub controller_netns: Option<String>,
+
 	/// Name of the worker interface to create.
 	#[clap(long)]
 	#[clap(value_name = "NAME")]
 	pub worker_interface: Option<String>,
+
+	/// Create the tunnel interface for the worker in the given network namespace.
+	///
+	/// The network namespace can be created ahead of time with the `ip netns` tool on Linux.
+	/// If the network namespace does not exist yet, it will be created.
+	#[clap(long)]
+	#[cfg(feature = "netns")]
+	pub worker_netns: Option<String>,
 
 	/// Addresses to add to the worker interface.
 	#[clap(long)]
@@ -344,11 +377,13 @@ async fn do_main(options: Options) -> Result<std::convert::Infallible, ()> {
 }
 
 impl ControllerCommand {
-	pub async fn run(&self) -> Result<std::convert::Infallible, ()> {
+	pub async fn run(self) -> Result<std::convert::Infallible, ()> {
 		let Self {
 			serial,
 			baud,
 			interface,
+			#[cfg(feature = "netns")]
+			netns,
 			address,
 			mtu,
 			max_payload_size,
@@ -358,38 +393,45 @@ impl ControllerCommand {
 			link_layer,
 		} = self;
 
-		let max_payload_size = check_mtu_message_size(*mtu, *max_payload_size)?;
+		let interface_options = InterfaceOptions {
+			name: interface,
+			#[cfg(feature = "netns")]
+			netns,
+			addresses: address,
+			mtu,
+			link_layer,
+		};
 
-		let interface = make_interface(interface.as_deref(), address, *mtu, *link_layer, "controller")?;
-		let serial_port =
-			SerialPort::open(serial, *baud).map_err(|e| tracing::error!("Failed to open serial port {}: {e}", self.serial.display()))?;
+		let max_payload_size = check_mtu_message_size(mtu, max_payload_size)?;
 
-		let mut controller = Controller::new(serial_port, interface).await?;
-		controller.set_read_timeout(*read_timeout);
-		controller.set_write_timeout(*write_timeout);
-		controller.set_poll_timeout(*poll_timeout);
+		let serial_port = SerialPort::open(&serial, baud)
+			.map_err(|e| tracing::error!("Failed to open serial port {}: {e}", serial.display()))?;
+
+		let interface = interface_options.make("controller")?;
+
+		let mut controller = Controller::new(serial_port, interface)?;
+		controller.set_read_timeout(read_timeout);
+		controller.set_write_timeout(write_timeout);
+		controller.set_poll_timeout(poll_timeout);
 		controller.set_max_payload_size(max_payload_size);
 
-		let span = tracing::span!(tracing::Level::INFO, "controller");
-		let work = async move {
-			#[cfg(unix)]
-			sd_notify::notify(&[
-				sd_notify::NotifyState::Status(&format!("Running on {}", serial.display())),
-				sd_notify::NotifyState::Ready,
-			])
-			.ok();
-			controller.run().await
-		};
-		work.instrument(span).await
+		#[cfg(unix)]
+		sd_notify::notify(&[
+			sd_notify::NotifyState::Status(&format!("Running on {}", serial.display())),
+			sd_notify::NotifyState::Ready,
+		]).ok();
+		controller.run().await
 	}
 }
 
 impl WorkerCommand {
-	pub async fn run(&self) -> Result<std::convert::Infallible, ()> {
+	pub async fn run(self) -> Result<std::convert::Infallible, ()> {
 		let Self {
 			serial,
 			baud,
 			interface,
+			#[cfg(feature = "netns")]
+			netns,
 			address,
 			mtu,
 			max_payload_size,
@@ -398,18 +440,27 @@ impl WorkerCommand {
 			link_layer,
 		} = self;
 
-		let max_payload_size = check_mtu_message_size(*mtu, *max_payload_size)?;
+		let interface_options = InterfaceOptions {
+			name: interface,
+			#[cfg(feature = "netns")]
+			netns,
+			addresses: address,
+			mtu,
+			link_layer,
+		};
 
-		let interface = make_interface(interface.as_deref(), address, *mtu, *link_layer, "worker")?;
-		let serial_port =
-			SerialPort::open(serial, *baud).map_err(|e| tracing::error!("Failed to open serial port {}: {e}", serial.display()))?;
+		let max_payload_size = check_mtu_message_size(mtu, max_payload_size)?;
 
-		let mut worker = worker::Worker::new(serial_port, interface);
-		worker.set_read_timeout(*read_timeout);
-		worker.set_write_timeout(*write_timeout);
+		let serial_port = SerialPort::open(&serial, baud)
+			.map_err(|e| tracing::error!("Failed to open serial port {}: {e}", serial.display()))?;
+
+		let interface = interface_options.make("worker")?;
+
+		let mut worker = Worker::new(serial_port, interface);
+		worker.set_read_timeout(read_timeout);
+		worker.set_write_timeout(write_timeout);
 		worker.set_max_payload_size(max_payload_size);
 
-		let span = tracing::span!(tracing::Level::INFO, "worker");
 		#[cfg(unix)]
 		sd_notify::notify(&[
 			sd_notify::NotifyState::Status(&format!("Running on {}", serial.display())),
@@ -417,17 +468,21 @@ impl WorkerCommand {
 		])
 		.ok();
 
-		worker.run().instrument(span).await
+		worker.run().await
 	}
 }
 
 #[cfg(unix)]
 impl LocalCommand {
-	pub async fn run(&self) -> Result<std::convert::Infallible, ()> {
+	pub async fn run(self) -> Result<std::convert::Infallible, ()> {
 		let Self {
 			controller_interface,
+			#[cfg(feature = "netns")]
+			controller_netns,
 			controller_address,
 			worker_interface,
+			#[cfg(feature = "netns")]
+			worker_netns,
 			worker_address,
 			mtu,
 			max_payload_size,
@@ -437,72 +492,137 @@ impl LocalCommand {
 			link_layer,
 		} = self;
 
-		let max_payload_size = check_mtu_message_size(*mtu, *max_payload_size)?;
+		let controller_interface = InterfaceOptions {
+			name: controller_interface,
+			#[cfg(feature = "netns")]
+			netns: controller_netns,
+			addresses: controller_address,
+			link_layer,
+			mtu,
+		};
 
-		let controller_interface = make_interface(controller_interface.as_deref(), controller_address, *mtu, *link_layer, "controller")?;
-		let worker_interface = make_interface(worker_interface.as_deref(), worker_address, *mtu, *link_layer, "worker")?;
+		let worker_interface = InterfaceOptions {
+			name: worker_interface,
+			#[cfg(feature = "netns")]
+			netns: worker_netns,
+			addresses: worker_address,
+			link_layer,
+			mtu,
+		};
+
+		let max_payload_size = check_mtu_message_size(mtu, max_payload_size)?;
 
 		let (a, b) = SerialPort::pair().map_err(|e| tracing::error!("Failed to create PTY pair: {e}"))?;
 
-		let mut controller = Controller::new(a, controller_interface).await?;
-		controller.set_read_timeout(*read_timeout);
-		controller.set_write_timeout(*write_timeout);
-		controller.set_poll_timeout(*poll_timeout);
-		controller.set_max_payload_size(max_payload_size);
+		let controller_span = tracing::span!(tracing::Level::INFO, "controller");
+		let worker_span = tracing::span!(tracing::Level::INFO, "worker");
 
-		let mut worker = worker::Worker::new(b, worker_interface);
-		worker.set_read_timeout(*read_timeout);
-		worker.set_write_timeout(*write_timeout);
-		worker.set_max_payload_size(max_payload_size);
+		let mut controller = {
+			let _entered = controller_span.enter();
+			let interface = controller_interface.make("controller")?;
+			let mut controller = Controller::new(a, interface)?;
+			controller.set_read_timeout(read_timeout);
+			controller.set_write_timeout(write_timeout);
+			controller.set_poll_timeout(poll_timeout);
+			controller.set_max_payload_size(max_payload_size);
+			controller
+		};
+		let controller = controller.run().instrument(controller_span);
 
-		let span = tracing::span!(tracing::Level::INFO, "controller");
-		let controller = controller.run().instrument(span);
-
-		let span = tracing::span!(tracing::Level::INFO, "worker");
-		let worker = worker.run().instrument(span);
+		let mut worker = {
+			let _entered = worker_span.enter();
+			let interface = worker_interface.make("worker")?;
+			let mut worker = Worker::new(b, interface);
+			worker.set_read_timeout(read_timeout);
+			worker.set_write_timeout(write_timeout);
+			worker.set_max_payload_size(max_payload_size);
+			worker
+		};
+		let worker = worker.run().instrument(worker_span);
 
 		#[cfg(unix)]
 		sd_notify::notify(&[
 			sd_notify::NotifyState::Status("Running on local PTY pair"),
 			sd_notify::NotifyState::Ready,
-		])
-		.ok();
+		]).ok();
 		match tokio::try_join!(controller, worker) {
 			Err(()) => Err(()),
 		}
 	}
 }
 
-fn make_interface(name: Option<&str>, addresses: &[Address], mtu: u16, link_layer: bool, task: &str) -> Result<tun_rs::AsyncDevice, ()> {
-	let mut builder = tun_rs::DeviceBuilder::new().mtu(mtu);
-	if link_layer {
-		builder = builder.layer(tun_rs::Layer::L2)
-	} else {
-		builder = builder.layer(tun_rs::Layer::L3)
-	}
-	if let Some(name) = name {
-		builder = builder.name(name);
-	}
-	for address in addresses {
-		match address.address {
-			IpAddr::V4(ip) => builder = builder.ipv4(ip, address.prefix, None),
-			IpAddr::V6(ip) => builder = builder.ipv6(ip, address.prefix),
+struct InterfaceOptions {
+	name: Option<String>,
+	#[cfg(feature = "netns")]
+	netns: Option<String>,
+	addresses: Vec<Address>,
+	mtu: u16,
+	link_layer: bool,
+}
+
+impl InterfaceOptions {
+	pub fn make(&self, task: &str) -> Result<tun_rs::AsyncDevice, ()> {
+		#[cfg(feature = "netns")]
+		if let Some(netns) = &self.netns {
+			let runtime = tokio::runtime::Handle::current();
+			// Enter the requested netns in a thread to create the interface.
+			let span = tracing::Span::current();
+			let interface = std::thread::scope(|scope| {
+				let join_handle = scope.spawn(|| {
+					let _entered = span.enter();
+					let _runtime_guard = runtime.enter();
+					NetNs::get_or_create(netns)?.enter()?;
+					self.make_internal(task)
+				});
+				join_handle.join().unwrap()
+			});
+			return interface;
 		}
-	}
-	let device = builder
-		.build_async()
-		.map_err(|e| tracing::error!("Failed to create interface for {task}: {e}"))?;
 
-	let name = device
-		.name()
-		.map_err(|e| tracing::error!("Failed to get name of {task} interface: {e}"))?;
-
-	tracing::info!("Created {task} tunnel interface {name} with MTU {mtu}");
-	for address in addresses {
-		tracing::info!("  Address: {address}");
+		// No netns specified (possibly because feature is disabled).
+		self.make_internal(task)
 	}
 
-	Ok(device)
+	fn make_internal(&self, task: &str) -> Result<tun_rs::AsyncDevice, ()> {
+		let mut builder = tun_rs::DeviceBuilder::new().mtu(self.mtu);
+		if self.link_layer {
+			builder = builder.layer(tun_rs::Layer::L2)
+		} else {
+			builder = builder.layer(tun_rs::Layer::L3)
+		}
+		if let Some(name) = &self.name {
+			builder = builder.name(name);
+		}
+		for address in &self.addresses {
+			match address.address {
+				IpAddr::V4(ip) => builder = builder.ipv4(ip, address.prefix, None),
+				IpAddr::V6(ip) => builder = builder.ipv6(ip, address.prefix),
+			}
+		}
+		let device = builder
+			.build_async()
+			.map_err(|e| tracing::error!("Failed to create interface for {task}: {e}"))?;
+
+		let name = device
+			.name()
+			.map_err(|e| tracing::error!("Failed to get name of {task} interface: {e}"))?;
+
+		let netns = cfg_select! {
+			feature = "netns" => { self.netns.as_deref() }
+			_ => { None::<&str> }
+		};
+
+		match netns {
+			Some(netns) => tracing::info!("Created {task} tunnel interface {name} with MTU {} in netns {netns:?}", self.mtu),
+			None => tracing::info!("Created {task} tunnel interface {name} with MTU {}", self.mtu),
+		};
+
+		for address in &self.addresses {
+			tracing::info!("  Address: {address}");
+		}
+
+		Ok(device)
+	}
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -545,6 +665,45 @@ impl std::fmt::Display for Address {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		let Self { address, prefix } = self;
 		write!(f, "{address}/{prefix}")
+	}
+}
+
+#[cfg(feature = "netns")]
+struct NetNs {
+	name: String,
+	ns: netns_rs::NetNs,
+}
+
+#[cfg(feature = "netns")]
+impl NetNs {
+	fn get_or_create(name: impl Into<String>) -> Result<Self, ()> {
+		let name = name.into();
+		let ns = match netns_rs::NetNs::new(&name) {
+			Ok(ns) => {
+				tracing::debug!("Created new netns {name:?}");
+				ns
+			},
+			Err(netns_rs::Error::CreateNsError(e)) if e.raw_os_error() == Some(libc::EPERM) => {
+				let ns = netns_rs::NetNs::get(&name)
+					.map_err(|e| tracing::error!("Failed to open existing netns {name:?}: {e}"))?;
+				tracing::debug!("Opened existing netns {name:?}");
+				ns
+			},
+			Err(e) => {
+				tracing::error!("Failed to create netns {name:?}: {e:?}");
+				return Err(())
+			},
+		};
+
+		Ok(Self {
+			name,
+			ns,
+		})
+	}
+
+	fn enter(&self) -> Result<(), ()> {
+		self.ns.enter()
+			.map_err(|e| tracing::error!("Failed to enter netns {:?}: {e}", self.name))
 	}
 }
 

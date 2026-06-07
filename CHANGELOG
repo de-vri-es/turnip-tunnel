@@ -1,6 +1,7 @@
 # Unreleased
 - [change][major] Use COBS encoding for the packet list.
 - [change][major] Encode packet sizes as `u16` instead of `u32`.
+- [add][minor] Linux: Allow creating the tunnel interfaces in a named netns.
 - [add][minor] Make the maximum payload size over the serial line configurable.
 - [fix][minor] Refuse to allocate buffer space for excessively large payloads.
 - [fix][minor] Check if CLI provided prefix lengths are valid for their address family.

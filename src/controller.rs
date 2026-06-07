@@ -14,7 +14,7 @@ pub struct Controller {
 }
 
 impl Controller {
-	pub async fn new(serial_port: SerialPort, interface: tun_rs::AsyncDevice) -> Result<Self, ()> {
+	pub fn new(serial_port: SerialPort, interface: tun_rs::AsyncDevice) -> Result<Self, ()> {
 		Ok(Self {
 			serial_port,
 			interface,
