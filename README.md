@@ -25,7 +25,7 @@ The principle of operation is also shown by this diagram:
 
 ## Controller and worker
 
-The tunnel works with `controller` and a `worker` side.
+The tunnel works with a `controller` and a `worker` side.
 They are essentially identical, except that the controller initiates all communication.
 The `worker` may only transmit in direct response to a message from the `controller`.
 This is required to prevent message collisions on the half-duplex line.
