@@ -1,4 +1,4 @@
-# Unreleased
+# Version 0.2.0 - 2026-06-08
 - [change][major] Use COBS encoding for the packet list.
 - [change][major] Encode packet sizes as `u16` instead of `u32`.
 - [add][minor] Linux: Allow creating the tunnel interfaces in a named netns.
