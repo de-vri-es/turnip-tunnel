@@ -42,12 +42,12 @@ impl Controller {
 	}
 
 	pub async fn run(&mut self) -> Result<std::convert::Infallible, ()> {
-		let mut packets = vec![0u8; 65535];
+		let mut packet_buffer = vec![0u8; self.max_payload_size];
 		let mut alive = true;
 		loop {
-			// Receive packets from the tunnel interface and transmit them over the serial port.
-			let payload_size = self.receive_from_interface(&mut packets).await?;
-			protocol::send_packets(&mut self.serial_port, &packets[..payload_size], self.write_timeout, self.max_payload_size)
+			// Receive packet_buffer from the tunnel interface and transmit them over the serial port.
+			let payload_size = self.receive_from_interface(&mut packet_buffer).await?;
+			protocol::send_packets(&mut self.serial_port, &packet_buffer[..payload_size], self.write_timeout, self.max_payload_size)
 				.await
 				.map_err(|e| tracing::error!("Failed to write packet over serial port: {e}"))?;
 
@@ -86,13 +86,15 @@ impl Controller {
 		}
 	}
 
-	/// Receive packets from the tunnel interface, putting them in the wire format in `payload_buffer`.
+	/// Receive packets from the tunnel interface, putting them in the wire format in `packet_buffer`.
+	///
+	/// Does not apply COBS encoding.
 	///
 	/// Waits up to `self.poll_timeout` for the first packet to be available,
 	/// then reads any directly available packets until the buffer is full.
-	async fn receive_from_interface(&mut self, payload_buffer: &mut [u8]) -> Result<usize, ()> {
+	async fn receive_from_interface(&mut self, packet_buffer: &mut [u8]) -> Result<usize, ()> {
 		// First parse one packet asynchronously with a timeout.
-		let Some((len_buffer, data_buffer)) = payload_buffer.split_first_chunk_mut() else {
+		let Some((len_buffer, data_buffer)) = packet_buffer.split_first_chunk_mut() else {
 			return Ok(0);
 		};
 
@@ -134,7 +136,7 @@ impl Controller {
 
 		// Then opportunistically try reading more packets until the buffer is full,
 		// but only if they are directly available.
-		while let Some((len_buffer, data_buffer)) = payload_buffer[total_size..].split_first_chunk_mut() {
+		while let Some((len_buffer, data_buffer)) = packet_buffer[total_size..].split_first_chunk_mut() {
 			if data_buffer.len() < mtu.into() {
 				tracing::trace!("Not enough space left in packet buffer to receive a full MTU");
 				break;
@@ -164,8 +166,8 @@ impl Controller {
 					}
 				}
 			};
-			total_size += std::mem::size_of_val(&packet_size) + usize::from(packet_size);
 			*len_buffer = packet_size.to_le_bytes();
+			total_size += std::mem::size_of_val(&packet_size) + usize::from(packet_size);
 		}
 
 		Ok(total_size)
