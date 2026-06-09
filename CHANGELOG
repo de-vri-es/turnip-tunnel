@@ -1,4 +1,4 @@
-# Unreleased
+# Version 0.2.1 - 2026-06-09
 - [fix][minor] Fix the size of the payload buffer.
 
 # Version 0.2.0 - 2026-06-08
