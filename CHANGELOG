@@ -1,3 +1,7 @@
+# Unreleased
+- [add][minor] Add `--version` command line flag to show the application version.
+- [add][minor] Add a short description of the application in the CLI help.
+
 # Version 0.2.1 - 2026-06-09
 - [fix][minor] Fix the size of the payload buffer.
 

@@ -113,6 +113,7 @@ const DEFAULT_MTU: u16 = 512;
 const DEFAULT_MAX_PAYLOAD_SIZE: usize = (DEFAULT_MTU as usize + 2) * 2; // Enough space for two MTU sized packets with their length.
 
 #[derive(clap::Parser)]
+#[clap(version, about)]
 struct Options {
 	#[clap(subcommand)]
 	pub command: Command,
@@ -131,7 +132,9 @@ enum Command {
 	Local(LocalCommand),
 }
 
+/// Run a `turnip` controller on a serial port.
 #[derive(clap::Parser)]
+#[clap(version)]
 struct ControllerCommand {
 	/// Serial port to forward traffic over.
 	#[clap(short, long)]
@@ -203,7 +206,9 @@ struct ControllerCommand {
 	pub link_layer: bool,
 }
 
+/// Run a `turnip` worker on a serial port.
 #[derive(clap::Parser)]
+#[clap(version)]
 struct WorkerCommand {
 	/// Serial port to forward traffic over.
 	#[clap(short, long)]
@@ -270,8 +275,13 @@ struct WorkerCommand {
 }
 
 /// Run the controller and the worker on a new PTY pair.
-#[derive(clap::Parser)]
+///
+/// Consider creating at-least one of the tunnel interfaces in a separate network namespace if you wish to test the interface.
+/// If both interfaces exist in the same network namespace, traffic will likely not be routed through the tunnel.
+/// Use `--controller-netns` and/or `--worker-netns` to create the interfaces in a different namespace.
 #[cfg(unix)]
+#[derive(clap::Parser)]
+#[clap(version)]
 struct LocalCommand {
 	/// Name of the controller interface to create.
 	#[clap(long)]
