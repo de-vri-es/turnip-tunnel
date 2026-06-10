@@ -1,4 +1,4 @@
-# Unreleased
+# Version 0.2.2 - 2026-06-10
 - [add][minor] Add `--version` command line flag to show the application version.
 - [add][minor] Add a short description of the application in the CLI help.
 

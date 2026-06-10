@@ -1,6 +1,6 @@
 [package]
 name = "turnip-tunnel"
-version = "0.2.1"
+version = "0.2.2"
 description = "IP/Ethernet tunnel backed by a half-duplex serial port"
 repository = "https://github.com/de-vri-es/turnip-tunnel"
 license = "MIT"
