@@ -1,4 +1,4 @@
-# Unreleased
+# Version 0.2.3 - 2026-06-29
 - [add][minor] Dynamically adjust poll timeout based on packets going from worker to controller.
 - [change][minor] Increase default maximum poll timeout to 50 milliseconds.
 - [change][minor] Increase default read and write timeouts to 200 milliseconds.
