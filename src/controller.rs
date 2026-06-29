@@ -4,12 +4,15 @@ use std::time::Duration;
 use crate::protocol;
 use crate::protocol::Error;
 
+pub const MIN_POLL_TIMEOUT: Duration = Duration::from_millis(1);
+
 pub struct Controller {
 	serial_port: SerialPort,
 	interface: tun_rs::AsyncDevice,
 	write_timeout: Duration,
 	read_timeout: Duration,
 	poll_timeout: Duration,
+	max_poll_timeout: Duration,
 	max_payload_size: usize,
 }
 
@@ -18,9 +21,10 @@ impl Controller {
 		Ok(Self {
 			serial_port,
 			interface,
-			read_timeout: Duration::from_millis(50),
-			write_timeout: Duration::from_millis(50),
-			poll_timeout: Duration::from_millis(10),
+			read_timeout: Duration::from_millis(200),
+			write_timeout: Duration::from_millis(200),
+			poll_timeout: MIN_POLL_TIMEOUT,
+			max_poll_timeout: Duration::from_millis(50),
 			max_payload_size: crate::DEFAULT_MAX_PAYLOAD_SIZE,
 		})
 	}
@@ -33,8 +37,15 @@ impl Controller {
 		self.write_timeout = timeout;
 	}
 
+	/// Set the maximum time to wait for packets to arrive on the tunnel interface, before polling the worker for packets.
+	///
+	/// The real timeout is dynamically adjusted between `MIN_POLL_TIMEOUT` and this maximum.
+	/// It is lowered to `MIN_POLL_TIMEOUT` when a packet arrives from the worker,
+	/// and doubled when we receive a message from the worker without any packets.
 	pub fn set_poll_timeout(&mut self, timeout: Duration) {
-		self.poll_timeout = timeout;
+		// We actually set the max poll timeout.
+		// The real poll timeout is adjusted dynamically depending on packets arriving from the worker.
+		self.max_poll_timeout = timeout;
 	}
 
 	pub fn set_max_payload_size(&mut self, max_size: usize) {
@@ -76,6 +87,15 @@ impl Controller {
 					}
 				}
 			};
+
+			// Adjust poll timeout dynamically: if no packets arrived over the serial port, double it.
+			// Otherwise, reset it to MIN_POLL_TIMEOUT to stay responsive.
+			if packets.is_empty() {
+				self.poll_timeout = (self.poll_timeout.saturating_mul(2)).min(self.max_poll_timeout);
+			} else {
+				self.poll_timeout = MIN_POLL_TIMEOUT;
+			}
+
 			for packet in &packets {
 				tracing::debug!("Writing packet of {} bytes to tunnel interface", packet.len());
 				self.interface
@@ -90,8 +110,11 @@ impl Controller {
 	///
 	/// Does not apply COBS encoding.
 	///
-	/// Waits up to `self.poll_timeout` for the first packet to be available,
+	/// Waits with a dynamic timeout for the first packet to be available,
 	/// then reads any directly available packets until the buffer is full.
+	///
+	/// The timeout is lowered to `MIN_POLL_TIMEOUT` when a packet arrives from the worker,
+	/// and doubled when we receive a message without packet from the worker.
 	async fn receive_from_interface(&mut self, packet_buffer: &mut [u8]) -> Result<usize, ()> {
 		// First parse one packet asynchronously with a timeout.
 		let Some((len_buffer, data_buffer)) = packet_buffer.split_first_chunk_mut() else {

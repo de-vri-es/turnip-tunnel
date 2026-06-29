@@ -112,6 +112,10 @@ mod worker;
 const DEFAULT_MTU: u16 = 512;
 const DEFAULT_MAX_PAYLOAD_SIZE: usize = (DEFAULT_MTU as usize + 2) * 2; // Enough space for two MTU sized packets with their length.
 
+const DEFAULT_POLL_TIMEOUT: &str = "50";
+const DEFAULT_READ_TIMEOUT: &str = "200";
+const DEFAULT_WRITE_TIMEOUT: &str = "200";
+
 #[derive(clap::Parser)]
 #[clap(version, about)]
 struct Options {
@@ -183,19 +187,19 @@ struct ControllerCommand {
 
 	/// Timeout for reading a message from the serial port.
 	#[clap(long)]
-	#[clap(default_value = "50")]
+	#[clap(default_value = DEFAULT_READ_TIMEOUT)]
 	#[clap(value_parser = parse_millis)]
 	pub read_timeout: Duration,
 
 	/// Timeout for writing a message to the serial port.
 	#[clap(long)]
-	#[clap(default_value = "50")]
+	#[clap(default_value = DEFAULT_WRITE_TIMEOUT)]
 	#[clap(value_parser = parse_millis)]
 	pub write_timeout: Duration,
 
 	/// Maximum time to wait for a packet from the tunnel interface before polling the worker for packets.
 	#[clap(long)]
-	#[clap(default_value = "10")]
+	#[clap(default_value = DEFAULT_POLL_TIMEOUT)]
 	#[clap(value_parser = parse_millis)]
 	pub poll_timeout: Duration,
 
@@ -257,13 +261,13 @@ struct WorkerCommand {
 
 	/// Timeout for reading a message from the serial port.
 	#[clap(long)]
-	#[clap(default_value = "50")]
+	#[clap(default_value = DEFAULT_READ_TIMEOUT)]
 	#[clap(value_parser = parse_millis)]
 	pub read_timeout: Duration,
 
 	/// Timeout for writing a message to the serial port.
 	#[clap(long)]
-	#[clap(default_value = "50")]
+	#[clap(default_value = DEFAULT_WRITE_TIMEOUT)]
 	#[clap(value_parser = parse_millis)]
 	pub write_timeout: Duration,
 
@@ -339,19 +343,19 @@ struct LocalCommand {
 
 	/// Timeout for reading a message from the serial port.
 	#[clap(long)]
-	#[clap(default_value = "50")]
+	#[clap(default_value = DEFAULT_READ_TIMEOUT)]
 	#[clap(value_parser = parse_millis)]
 	pub read_timeout: Duration,
 
 	/// Timeout for writing a message to the serial port.
 	#[clap(long)]
-	#[clap(default_value = "50")]
+	#[clap(default_value = DEFAULT_WRITE_TIMEOUT)]
 	#[clap(value_parser = parse_millis)]
 	pub write_timeout: Duration,
 
 	/// Maximum time to wait for a packet from the tunnel interface.
 	#[clap(long)]
-	#[clap(default_value = "10")]
+	#[clap(default_value = DEFAULT_POLL_TIMEOUT)]
 	#[clap(value_parser = parse_millis)]
 	pub poll_timeout: Duration,
 
