@@ -668,7 +668,7 @@ impl std::str::FromStr for Address {
 					return Err(format!("invalid prefix length for {family}: maximum is {max_prefix}"));
 				}
 				prefix
-			}
+			},
 		};
 
 		Ok(Self { address, prefix })
@@ -705,7 +705,7 @@ impl NetNs {
 			},
 			Err(e) => {
 				tracing::error!("Failed to create netns {name:?}: {e:?}");
-				return Err(())
+				return Err(());
 			},
 		};
 

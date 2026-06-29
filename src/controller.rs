@@ -69,14 +69,14 @@ impl Controller {
 						alive = true;
 					}
 					packets
-				}
+				},
 				Err(Error::TimeoutElapsed) => {
 					if alive {
 						tracing::error!("Time-out reading from serial port, assuming connection is gone");
 						alive = false;
 					}
 					continue;
-				}
+				},
 				Err(e) => {
 					tracing::error!("{e}");
 					if let Error::SerialPort(_) = e {
@@ -85,7 +85,7 @@ impl Controller {
 					} else {
 						continue;
 					}
-				}
+				},
 			};
 
 			// Adjust poll timeout dynamically: if no packets arrived over the serial port, double it.
@@ -130,11 +130,11 @@ impl Controller {
 			Ok(Ok(0)) => {
 				tracing::error!("Read 0-sized packet from tunnel interface, interface was deleted?");
 				return Err(());
-			}
+			},
 			Ok(Err(e)) => {
 				tracing::error!("Failed to receive packet from tunnel interface: {e}");
 				return Err(());
-			}
+			},
 			Ok(Ok(packet_size)) => {
 				tracing::debug!("Received packet of {packet_size} bytes from tunnel interface");
 				match u16::try_from(packet_size) {
@@ -142,9 +142,9 @@ impl Controller {
 					Err(_) => {
 						tracing::warn!("Dropping extremely large packet ({packet_size} bytes) received from tunnel interface");
 						0
-					}
+					},
 				}
-			}
+			},
 		};
 
 		// We used a packet size of 0 to indicate we received but dropped a packet.
@@ -168,7 +168,7 @@ impl Controller {
 				Ok(0) => {
 					tracing::error!("Read 0-sized packet from tunnel interface");
 					return Err(());
-				}
+				},
 				Err(e) => {
 					if e.kind() == std::io::ErrorKind::WouldBlock {
 						tracing::trace!("No more packets available from tunnel interface");
@@ -177,7 +177,7 @@ impl Controller {
 						tracing::error!("Failed to receive packet from tunnel interface: {e}");
 						return Err(());
 					}
-				}
+				},
 				Ok(packet_size) => {
 					tracing::debug!("Received packet of {packet_size} bytes from tunnel interface");
 					match u16::try_from(packet_size) {
@@ -185,9 +185,9 @@ impl Controller {
 						Err(_) => {
 							tracing::warn!("Dropping extremely large packet ({packet_size} bytes) received from tunnel interface");
 							continue;
-						}
+						},
 					}
-				}
+				},
 			};
 			*len_buffer = packet_size.to_le_bytes();
 			total_size += std::mem::size_of_val(&packet_size) + usize::from(packet_size);

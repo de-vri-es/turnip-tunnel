@@ -39,14 +39,16 @@ impl From<tokio::time::error::Elapsed> for Error {
 #[tracing::instrument(skip(channel, packets))]
 pub async fn send_packets(channel: &mut SerialPort, packets: &[u8], timeout: Duration, max_payload_size: usize) -> Result<(), Error> {
 	if packets.len() > max_payload_size {
-		return Err(Error::MessagePayloadTooLarge { actual: packets.len(), max_payload_size });
+		return Err(Error::MessagePayloadTooLarge {
+			actual: packets.len(),
+			max_payload_size,
+		});
 	}
 
 	let mut stuffed = Vec::new();
 	corncobs::encode(packets, &mut stuffed);
 
 	let work = async {
-
 		tracing::trace!(
 			"Sending message with payload of {} bytes ({} after byte-stuffing)",
 			packets.len(),
@@ -91,7 +93,7 @@ pub async fn read_packets(channel: &mut SerialPort, timeout: Duration, max_paylo
 				// But at the moment, in practise, for [`serial2_tokio::SerialPort`], it does mean that.
 				return Err(Error::SerialPort(std::io::ErrorKind::UnexpectedEof.into()));
 			}
-			tracing::trace!("Read {read_bytes} bytes: 0x{:02X?}",  &buffer[filled..][..read_bytes]);
+			tracing::trace!("Read {read_bytes} bytes: 0x{:02X?}", &buffer[filled..][..read_bytes]);
 			filled += read_bytes;
 			let preamble_offset = scan_preamble_start(&buffer[..filled]);
 			if preamble_offset != 0 {
@@ -113,7 +115,7 @@ pub async fn read_packets(channel: &mut SerialPort, timeout: Duration, max_paylo
 			};
 		};
 
-		if filled > message_end{
+		if filled > message_end {
 			tracing::warn!("Discarding {} trailing garbage bytes", filled - message_end);
 		}
 
@@ -209,8 +211,8 @@ impl std::fmt::Debug for Packets {
 }
 
 impl<'a> std::iter::IntoIterator for &'a Packets {
-	type Item = &'a [u8];
 	type IntoIter = PacketsIterator<'a>;
+	type Item = &'a [u8];
 
 	fn into_iter(self) -> Self::IntoIter {
 		self.iter()
@@ -341,7 +343,6 @@ mod tests {
 		assert!(let Err(Error::InvalidMessagePayload { .. }) = Packets::from_payload(data));
 	}
 
-
 	#[test]
 	#[tracing_test::traced_test]
 	fn scan_finds_preamble_at_start() {
@@ -418,7 +419,6 @@ mod tests {
 		assert!(let Ok((_tx, mut rx)) = SerialPort::pair());
 		assert!(let Err(Error::TimeoutElapsed) = read_packets(&mut rx, TIMEOUT, MAX_PAYLOAD_SIZE).await);
 	}
-
 
 	#[tokio::test]
 	#[tracing_test::traced_test]

@@ -46,7 +46,7 @@ impl Worker {
 						alive = true;
 					}
 					packets
-				}
+				},
 				Err(Error::TimeoutElapsed) => {
 					if alive {
 						tracing::error!("Time-out reading from serial port, assuming connection is gone");
@@ -55,7 +55,7 @@ impl Worker {
 					// NOTE: If we didn't read anything, we don't have permission to send.
 					// The link is half-duplex, so we can only respond after we receive a message.
 					continue;
-				}
+				},
 				Err(e) => {
 					tracing::error!("{e}");
 					if let Error::SerialPort(_) = e {
@@ -68,7 +68,7 @@ impl Worker {
 						tracing::warn!("Received damaged message from serial port, trying to re-synchronize on next message from controller.");
 						continue;
 					}
-				}
+				},
 			};
 
 			let mtu = self.interface.mtu()
@@ -86,20 +86,20 @@ impl Worker {
 					Ok(0) => {
 						tracing::error!("Read 0-sized packet from tunnel interface, interface was deleted?");
 						return Err(());
-					}
+					},
 					Ok(packet_size) => {
 						tracing::debug!("Received packet of {packet_size} bytes from tunnel interface");
 						match u16::try_from(packet_size) {
 							Ok(packet_size) => {
 								*len_buffer = packet_size.to_le_bytes();
 								total_size += std::mem::size_of_val(&packet_size) + usize::from(packet_size);
-							}
+							},
 							Err(_) => {
 								tracing::warn!("Dropping extremely large packet ({packet_size} bytes) received from tunnel interface");
 								continue;
-							}
+							},
 						}
-					}
+					},
 					Err(e) => {
 						if e.kind() == std::io::ErrorKind::WouldBlock {
 							break;
