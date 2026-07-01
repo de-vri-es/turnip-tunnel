@@ -58,6 +58,13 @@ impl Controller {
 		loop {
 			// Receive packet_buffer from the tunnel interface and transmit them over the serial port.
 			let payload_size = self.receive_from_interface(&mut packet_buffer).await?;
+
+			// Reset the poll timeout if we send a packet.
+			// We assume there should be a reply to this packet,
+			// so we don't want to wait for more packets from our side too long.
+			if payload_size != 0 {
+				self.poll_timeout = MIN_POLL_TIMEOUT;
+			}
 			protocol::send_packets(&mut self.serial_port, &packet_buffer[..payload_size], self.write_timeout, self.max_payload_size)
 				.await
 				.map_err(|e| tracing::error!("Failed to write packet over serial port: {e}"))?;

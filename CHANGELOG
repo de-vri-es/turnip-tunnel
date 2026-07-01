@@ -1,3 +1,6 @@
+# Unreleased
+- [change][minor] Also reduce the poll timeout when a packet is sent from controller to worker (assume there will be a reply).
+
 # Version 0.2.3 - 2026-06-29
 - [add][minor] Dynamically adjust poll timeout based on packets going from worker to controller.
 - [change][minor] Increase default maximum poll timeout to 50 milliseconds.
