@@ -1,4 +1,4 @@
-# Unreleased
+# Version 0.2.4 - 2026-07-01
 - [change][minor] Also reduce the poll timeout when a packet is sent from controller to worker (assume there will be a reply).
 
 # Version 0.2.3 - 2026-06-29
